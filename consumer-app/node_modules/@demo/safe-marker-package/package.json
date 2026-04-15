@@ -1,0 +1,17 @@
+{
+  "name": "@demo/safe-marker-package",
+  "version": "1.0.0",
+  "description": "Safe marker-only demo package for dependency confusion simulation.",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node scripts/postinstall-marker.js"
+  },
+  "keywords": [
+    "demo",
+    "supply-chain",
+    "safe",
+    "marker"
+  ],
+  "author": "demo",
+  "license": "MIT"
+}

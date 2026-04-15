@@ -1,0 +1,13 @@
+version: "3.9"
+services:
+  verdaccio:
+    image: verdaccio/verdaccio:5
+    container_name: verdaccio-safe-demo
+    ports:
+      - "4873:4873"
+    volumes:
+      - ./infra/verdaccio/config.yaml:/verdaccio/conf/config.yaml
+      - verdaccio_storage:/verdaccio/storage
+
+volumes:
+  verdaccio_storage:

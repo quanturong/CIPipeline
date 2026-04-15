@@ -1,0 +1,22 @@
+stages:
+  - build
+
+build_clean:
+  stage: build
+  image: node:20
+  script:
+    - node ci/build-clean.js
+  artifacts:
+    paths:
+      - artifacts/
+
+# OPTIONAL DEMO: Simulated compromised job (safe marker only)
+build_with_injected_step:
+  stage: build
+  image: node:20
+  script:
+    - node ci/build-clean.js
+    - node ci/inject-safe-marker.js
+  artifacts:
+    paths:
+      - artifacts/

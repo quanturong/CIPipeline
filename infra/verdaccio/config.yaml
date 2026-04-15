@@ -1,0 +1,30 @@
+storage: /verdaccio/storage
+plugins: ./plugins
+
+web:
+  title: Safe Registry Demo
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    max_users: 100
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+
+packages:
+  "@demo/*":
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+  "**":
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+
+server:
+  keepAliveTimeout: 60
+
+log:
+  - { type: stdout, format: pretty, level: http }

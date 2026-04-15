@@ -1,0 +1,4 @@
+registry=http://localhost:4873/
+always-auth=true
+# Generate token after npm adduser --registry http://localhost:4873
+# //_localhost:4873/:_authToken="<YOUR_VERDACCIO_TOKEN>"
