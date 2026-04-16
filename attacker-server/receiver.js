@@ -1,7 +1,7 @@
 /**
  * [PoC - NT230] Attacker Receiver Server
  *
- * Chạy trên máy attacker (192.168.157.134).
+ * Chạy trên máy attacker (container 172.30.0.20, Docker bridge network).
  * Lắng nghe các HTTP POST từ malicious package chạy trong CI của victim.
  *
  * Endpoints:

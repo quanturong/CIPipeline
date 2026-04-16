@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   verdaccio:
     image: verdaccio/verdaccio:5
@@ -8,6 +7,27 @@ services:
     volumes:
       - ./infra/verdaccio/config.yaml:/verdaccio/conf/config.yaml
       - verdaccio_storage:/verdaccio/storage
+    networks:
+      poc_network:
+        ipv4_address: 172.30.0.10
+
+  attacker:
+    build: ./attacker-server
+    container_name: attacker-receiver
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./attacker-server/loot:/app/loot
+    networks:
+      poc_network:
+        ipv4_address: 172.30.0.20
+
+networks:
+  poc_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 volumes:
   verdaccio_storage:

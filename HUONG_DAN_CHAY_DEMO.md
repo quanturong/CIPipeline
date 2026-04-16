@@ -66,16 +66,25 @@ docker compose -f docker-compose.verdaccio.yml up -d
 
 Kiểm tra: mở browser → `http://localhost:4873` → thấy Verdaccio UI.
 
-### Bước 2: Khởi động Attacker Receiver
+### Bước 2: Khởi động Attacker Receiver + Verdaccio
 
-Mở **Terminal 1** (máy attacker):
+Attacker receiver giờ chạy trong **Docker container** (IP `172.30.0.20`) trên bridge network riêng — traffic từ victim đi qua Docker network thay vì loopback `127.0.0.1`.
 
 ```powershell
 cd e:\NT230\DoAn
-node attacker-server\receiver.js
+docker compose -f docker-compose.verdaccio.yml up -d --build
 ```
 
-Output kỳ vọng:
+Kiểm tra:
+```powershell
+# Verdaccio
+Invoke-WebRequest -Uri "http://localhost:4873" -UseBasicParsing
+
+# Attacker receiver
+docker logs attacker-receiver
+```
+
+Output kỳ vọng từ `docker logs attacker-receiver`:
 ```
 ═══════════════════════════════════════════════════════════
 [NT230 PoC] Attacker receiver listening on port 8080
@@ -84,6 +93,8 @@ Output kỳ vọng:
   GET  /beacon                         — second-stage consumer beacon
 ═══════════════════════════════════════════════════════════
 ```
+
+> **Network topology**: Host machine (victim/CI) → `172.30.0.20` (attacker container). Traffic đi qua Docker bridge `poc_network` (subnet `172.30.0.0/24`), không còn là loopback.
 
 ### Bước 3: Chạy Full Attack Simulation
 
@@ -95,22 +106,28 @@ cd e:\NT230\DoAn
 ```
 
 Script này tự động:
-1. ✅ Start Verdaccio registry
+1. ✅ Start Verdaccio + Attacker receiver (Docker containers)
 2. ✅ Đổi package.json → malicious postinstall
 3. ✅ **Xóa env vars nhạy cảm thật** (API_KEY, SECRET, TOKEN...) rồi set fake CI secrets
 4. ✅ Tạo baseline artifact hash
-5. ✅ `npm install` từ Verdaccio → **postinstall đánh cắp secrets** → gửi về receiver
+5. ✅ `npm install` từ Verdaccio → **postinstall đánh cắp secrets** → gửi về receiver (172.30.0.20)
 6. ✅ Chạy artifact poisoning step
 
 > **Lưu ý bảo mật**: Bước 3 tự động xóa credentials thật từ máy developer trước khi set fake secrets. Điều này tránh leak API key thật (như RUNPOD_API_KEY, SALAD_API_KEY) khi postinstall exfiltrate toàn bộ env vars.
 
 ### Bước 4: Kiểm tra kết quả
 
-**Terminal 1** (receiver) sẽ hiển thị:
+Xem log attacker receiver:
+
+```powershell
+docker logs attacker-receiver
+```
+
+Output kỳ vọng:
 
 ```
 ═══════════════════════════════════════════════════════════
-[...] ◄◄ CI SECRETS RECEIVED from ::ffff:127.0.0.1
+[...] ◄◄ CI SECRETS RECEIVED from ::ffff:172.30.0.1
 ──────────────────────────────────────────────────────────
   [secrets]
     CI_JOB_TOKEN=glpat-FAKE-CI-TOKEN-xxxxxxxxxxxx ◄ HIGH VALUE
@@ -123,6 +140,8 @@ Script này tự động:
 [...] ◄◄ ARTIFACT POISONED — confirmed
 ═══════════════════════════════════════════════════════════
 ```
+
+> **Chú ý IP**: Source IP hiện là `172.30.0.1` (Docker gateway) thay vì `127.0.0.1` — chứng minh traffic đi qua network boundary.
 
 Stolen data được lưu trong `attacker-server/loot/`.
 
@@ -263,29 +282,28 @@ node detector\detect-supply-chain.js verify artifacts
 ### Thứ tự chạy demo cho reviewer/giảng viên:
 
 ```
-Terminal 1 (Attacker):    node attacker-server\receiver.js
-                          ↕ chờ
+Terminal 1 (Attack):      .\scripts\run-malicious-ci-simulation.ps1
+                          → Verdaccio + Attacker receiver tự start (Docker)
+                          → Receiver nhận secrets (Phần A ✓)
+                          → Xem log: docker logs attacker-receiver
 
-Terminal 2 (Attack):      .\scripts\run-malicious-ci-simulation.ps1
-                          → Receiver hiện secrets bị đánh cắp (Phần A ✓)
-
-Terminal 3 (AV Test):     .\scripts\test-av-bypass.ps1   [Run as Admin]
+Terminal 2 (AV Test):     .\scripts\test-av-bypass.ps1   [Run as Admin]
                           → Defender không phát hiện (Phần B ✓)
 
-Terminal 2 (Detector):    node detector\detect-supply-chain.js full . artifacts
+Terminal 1 (Detector):    node detector\detect-supply-chain.js full . artifacts
                           → Detector phát hiện 3 IOCs (Phần C ✓)
 ```
 
 ### Timeline:
 
 ```
-[T=0]   Attacker bật receiver                    │ Terminal 1
-[T=1]   Verdaccio start, malicious package lên   │ Terminal 2
-[T=2]   CI env vars được set (fake secrets)       │ Terminal 2
-[T=3]   npm install → secrets bị exfiltrate       │ Terminal 2 → Terminal 1
-[T=4]   Artifact bị poison                        │ Terminal 2 → Terminal 1
-[T=5]   Defender scan → bypass confirmed          │ Terminal 3
-[T=6]   Detector scan → 3 ALERTs                  │ Terminal 2
+[T=0]   Docker start: Verdaccio + Attacker receiver  │ docker compose up
+[T=1]   Malicious package publish lên Verdaccio       │ Terminal 1
+[T=2]   CI env vars cleanup + set fake secrets         │ Terminal 1
+[T=3]   npm install → secrets gửi qua Docker network   │ Host → 172.30.0.20
+[T=4]   Artifact bị poison, confirm qua Docker network │ Host → 172.30.0.20
+[T=5]   Defender scan → bypass confirmed               │ Terminal 2
+[T=6]   Detector scan → 3 ALERTs                       │ Terminal 1
 ```
 
 ---
@@ -293,7 +311,7 @@ Terminal 2 (Detector):    node detector\detect-supply-chain.js full . artifacts
 ## Cleanup Sau Demo
 
 ```powershell
-# Tắt Verdaccio
+# Tắt Verdaccio + Attacker receiver
 cd e:\NT230\DoAn
 docker compose -f docker-compose.verdaccio.yml down
 
@@ -338,7 +356,7 @@ So sánh 2 file để thấy attacker đã thêm:
 |--------|----------|
 | Docker không chạy | Mở Docker Desktop, chờ "Docker is running" |
 | Verdaccio 401 Unauthorized | `npm adduser --registry http://localhost:4873` (user: demo, pass: demo, email: demo@test.com) |
-| receiver.js port 8080 bị chiếm | Đổi `ATTACKER_PORT` trong receiver.js + postinstall-ci-attack.js |
+| receiver.js port 8080 bị chiếm | `docker compose -f docker-compose.verdaccio.yml down` rồi `up -d --build` lại |
 | Defender scan cần Admin | Chạy PowerShell "Run as Administrator" (khuyến nghị cho scan đáng tin cậy) |
 | `netstat -nob` cần Admin | IOC-2 **tự động fallback** sang `Get-NetTCPConnection` (không cần Admin) |
 | npm install lỗi tarball | Chạy `npm pack` lại trong `packages/safe-marker-package/` |
@@ -363,7 +381,7 @@ So sánh 2 file để thấy attacker đã thêm:
 
 | Hạn chế | Giải thích |
 |---------|------------|
-| Single-host demo | Attacker + victim chạy cùng máy (127.0.0.1). Thực tế attacker ở remote server |
+| Single-host demo | Attacker chạy trong Docker container (172.30.0.20), traffic qua bridge network — **không còn loopback** |
 | Không chạy CI thật | Dùng PowerShell script thay vì GitLab Runner. `.gitlab-ci.compromised.yml` là mô phỏng |
 | Static regex detection | IOC-1 dùng regex → dễ bị bypass bằng string concatenation/obfuscation |
 | Chỉ test Windows Defender | Chưa test multi-AV (VirusTotal) hoặc EDR khác |

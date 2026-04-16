@@ -45,14 +45,14 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 Write-Host "  Node.js: $(node --version)" -ForegroundColor Green
 
 # ───────────────────────────────────────────────────────────────────────────
-# Bước 1: Start Verdaccio registry
+# Bước 1: Start Verdaccio registry + Attacker receiver (Docker)
 # ───────────────────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "[1/6] Starting Verdaccio registry..." -ForegroundColor Yellow
+Write-Host "[1/6] Starting Verdaccio registry + Attacker receiver..." -ForegroundColor Yellow
 
 Push-Location $root
-docker compose -f docker-compose.verdaccio.yml up -d
-Start-Sleep -Seconds 3
+docker compose -f docker-compose.verdaccio.yml up -d --build
+Start-Sleep -Seconds 5
 
 # Kiểm tra Verdaccio sẵn sàng
 try {
@@ -62,6 +62,16 @@ try {
     Write-Host "  Verdaccio chưa sẵn sàng, chờ thêm..." -ForegroundColor Yellow
     Start-Sleep -Seconds 5
 }
+
+# Kiểm tra Attacker receiver sẵn sàng
+try {
+    $response = Invoke-WebRequest -Uri "http://localhost:8080/beacon" -UseBasicParsing -TimeoutSec 5
+    Write-Host "  Attacker receiver is running at 172.30.0.20:8080 (Docker)" -ForegroundColor Green
+} catch {
+    Write-Host "  Attacker receiver chưa sẵn sàng, chờ thêm..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
+}
+Write-Host "  Network: Victim (host) → Attacker (172.30.0.20, Docker bridge)" -ForegroundColor DarkYellow
 Pop-Location
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -179,9 +189,13 @@ Write-Host ""
 Write-Host "═" * 60 -ForegroundColor Red
 Write-Host "[DONE] Attack simulation complete!" -ForegroundColor Red
 Write-Host ""
-Write-Host "  Check attacker server (receiver.js) for:" -ForegroundColor Yellow
+Write-Host "  Attacker receiver (Docker 172.30.0.20) đã nhận:" -ForegroundColor Yellow
 Write-Host "    - POST /exfil/secrets            → stolen CI secrets" -ForegroundColor Yellow
 Write-Host "    - POST /exfil/artifact-poison-confirm → poisoned artifact" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  Xem log attacker receiver:" -ForegroundColor Cyan
+Write-Host "    docker logs attacker-receiver" -ForegroundColor Cyan
+Write-Host "    (hoặc xem loot: attacker-server\loot\)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Next: Run detector to see if it catches the attack:" -ForegroundColor Cyan
 Write-Host "    node detector\detect-supply-chain.js full . artifacts" -ForegroundColor Cyan
