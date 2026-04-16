@@ -109,6 +109,18 @@ Write-Host "  Malicious package published to Verdaccio!" -ForegroundColor Red
 Write-Host ""
 Write-Host "[3/6] Setting up fake CI environment variables..." -ForegroundColor Yellow
 
+# XÓA secrets thật từ máy developer trước khi set fake — tránh leak credentials thật
+Write-Host "  Cleaning real secrets from environment..." -ForegroundColor Gray
+$sensitivePatterns = @("API_KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL", "PRIVATE_KEY", "ASKPASS", "AUTH")
+foreach ($var in (Get-ChildItem env:)) {
+    foreach ($pattern in $sensitivePatterns) {
+        if ($var.Name -match $pattern -and $var.Name -notmatch "^(CI_|GITHUB_|AWS_|NPM_|DEPLOY_)") {
+            Write-Host "    Removed: $($var.Name)" -ForegroundColor DarkGray
+            Remove-Item "env:$($var.Name)" -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 $env:CI = "true"
 $env:CI_JOB_TOKEN = "glpat-FAKE-CI-TOKEN-xxxxxxxxxxxx"
 $env:CI_PROJECT_PATH = "nt230-demo/supply-chain-victim"

@@ -43,10 +43,12 @@ DoAn/
 │   └── detect-supply-chain.js        # Phần C: công cụ phát hiện
 ├── scripts/
 │   ├── run-malicious-ci-simulation.ps1   # Script chạy full attack
-│   ├── test-av-bypass.ps1                # Phần B: test AV bypass
+│   ├── test-av-bypass.ps1                # Phần B: test AV bypass + AMSI analysis
 │   ├── publish-to-verdaccio.ps1          # Publish package lên registry
 │   └── simulate-publish-consume.ps1      # Safe simulation
 ├── infra/verdaccio/                  # Verdaccio config
+├── .gitlab-ci.yml                    # CI pipeline CLEAN (safe steps only)
+├── .gitlab-ci.compromised.yml        # CI pipeline COMPROMISED (attack inject)
 ├── docker-compose.verdaccio.yml      # Docker Compose cho registry
 └── artifacts/                        # Build output (bị poison)
 ```
@@ -95,10 +97,12 @@ cd e:\NT230\DoAn
 Script này tự động:
 1. ✅ Start Verdaccio registry
 2. ✅ Đổi package.json → malicious postinstall
-3. ✅ Set fake CI env vars (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, etc.)
+3. ✅ **Xóa env vars nhạy cảm thật** (API_KEY, SECRET, TOKEN...) rồi set fake CI secrets
 4. ✅ Tạo baseline artifact hash
 5. ✅ `npm install` từ Verdaccio → **postinstall đánh cắp secrets** → gửi về receiver
 6. ✅ Chạy artifact poisoning step
+
+> **Lưu ý bảo mật**: Bước 3 tự động xóa credentials thật từ máy developer trước khi set fake secrets. Điều này tránh leak API key thật (như RUNPOD_API_KEY, SALAD_API_KEY) khi postinstall exfiltrate toàn bộ env vars.
 
 ### Bước 4: Kiểm tra kết quả
 
@@ -158,8 +162,23 @@ Script tự động:
 | 4 | **Legitimate Traffic** | HTTP POST JSON trông như REST API call bình thường |
 | 5 | **Fail-silent** | Lỗi bị nuốt → không trigger behavioral detection |
 | 6 | **Base64 in Comments** | Payload trong artifact được encode, nằm trong JS comment |
+| 7 | **AMSI không hook Node.js** | V8 engine không tích hợp AMSI provider → Defender không scan JS runtime |
 
-> **Lưu ý**: report file (`artifacts/av-bypass-report.txt`) ghi đầy đủ Defender version + scan result — đây là bằng chứng cho Phần B.
+### AMSI Analysis (quan trọng)
+
+AMSI (Antimalware Scan Interface) là cơ chế Windows cho phép AV scan script content tại runtime. **Đây là lý do cốt lõi** tại sao bypass thành công:
+
+| Runtime | AMSI Integration | Defender scan được? |
+|---------|-----------------|--------------------|
+| PowerShell | Có (built-in) | ✅ CÓ |
+| .NET CLR | Có | ✅ CÓ |
+| WSH (JScript) | Có | ✅ CÓ |
+| Python (CPython) | Không | ❌ Bypass |
+| **Node.js (V8)** | **Không** | **❌ Bypass** |
+
+> **Phân biệt quan trọng**: JScript chạy qua WSH (`cscript`/`wscript`) BỊ AMSI scan. JavaScript chạy qua Node.js (V8 engine) KHÔNG bị AMSI scan. V8 parse và execute JS trực tiếp mà không gọi `amsi.dll → AmsiScanBuffer()`.
+
+> **Lưu ý**: Script tự động đợi 30 giây sau `Start-MpScan` để scan hoàn tất (vì `Start-MpScan` trả về async). Report file (`artifacts/av-bypass-report.txt`) ghi đầy đủ Defender version + scan result + AMSI analysis.
 
 ---
 
@@ -170,8 +189,8 @@ Script tự động:
 | IOC | Mô tả | Phương pháp |
 |-----|--------|-------------|
 | **IOC-1** | Postinstall script truy cập env vars nhạy cảm | Static analysis: scan node_modules |
-| **IOC-2** | node.exe tạo outbound connection bất thường | Network monitoring: netstat |
-| **IOC-3** | Build artifact bị tamper | Integrity check: SHA-256 hash comparison |
+| **IOC-2** | node.exe tạo outbound connection bất thường | `netstat -nob` (Admin) hoặc `Get-NetTCPConnection` (fallback, không cần Admin) |
+| **IOC-3** | Build artifact bị tamper | Integrity check: SHA-256 hash (tự loại file không phải build output) |
 
 ### Cách 1: Full scan (chạy sau attack)
 
@@ -186,10 +205,13 @@ Output kỳ vọng:
 [ALERT] [IOC-1] SUSPICIOUS: @demo/safe-marker-package → postinstall script contains: process.env, TOKEN, SECRET, KEY, require("http")
 
 [2/3] IOC-2: Checking network connections...
-[ALERT] [IOC-2] node.exe has outbound connection to 192.168.157.134:8080
+[WARN] [IOC-2] netstat -nob failed (need Admin): ...
+[INFO] [IOC-2] Falling back to PowerShell Get-NetTCPConnection (no Admin required)...
+[ALERT] [IOC-2] node.exe has outbound connection to 192.168.157.134:8080 (ESTABLISHED)
 
 [3/3] IOC-3: Verifying artifact integrity...
 [ALERT] [IOC-3] TAMPERED: "build-output.txt" hash changed!
+(av-bypass-report.txt được tự động loại — không phải build artifact)
 
 ═══════════════════════════════════════════════════════════
 [RESULT] 3 ALERT(s) detected! Review: detector\detector-alerts.log
@@ -296,17 +318,32 @@ Remove-Item consumer-app\package-lock.json -ErrorAction SilentlyContinue
 
 ---
 
+## So Sánh CI Pipeline: Clean vs Compromised
+
+| File | Mô tả | Stages |
+|------|--------|--------|
+| `.gitlab-ci.yml` | Pipeline **CLEAN** gốc | build → (safe marker) |
+| `.gitlab-ci.compromised.yml` | Pipeline **BỊ INJECT** bởi attacker | install (secret theft) → build → inject_backdoor |
+
+So sánh 2 file để thấy attacker đã thêm:
+- Stage `install`: `npm install` từ Verdaccio → postinstall-ci-attack.js tự động exfiltrate secrets
+- Stage `inject`: chạy `inject-malicious-artifact.js` → append backdoor vào build artifact
+- Tên job vô hại ("Post-build processing...") để tránh nghi ngờ
+
+---
+
 ## Troubleshooting
 
 | Vấn đề | Giải pháp |
-|--------|-----------|
+|--------|----------|
 | Docker không chạy | Mở Docker Desktop, chờ "Docker is running" |
 | Verdaccio 401 Unauthorized | `npm adduser --registry http://localhost:4873` (user: demo, pass: demo, email: demo@test.com) |
 | receiver.js port 8080 bị chiếm | Đổi `ATTACKER_PORT` trong receiver.js + postinstall-ci-attack.js |
-| Defender scan cần Admin | Chạy PowerShell "Run as Administrator" |
-| `netstat -nob` cần Admin | IOC-2 (network) cần elevated prompt |
+| Defender scan cần Admin | Chạy PowerShell "Run as Administrator" (khuyến nghị cho scan đáng tin cậy) |
+| `netstat -nob` cần Admin | IOC-2 **tự động fallback** sang `Get-NetTCPConnection` (không cần Admin) |
 | npm install lỗi tarball | Chạy `npm pack` lại trong `packages/safe-marker-package/` |
 | Package 409 Already Published | Bump version trong package.json trước khi publish |
+| IOC-3 false positive av-bypass-report.txt | File này đã được loại tự động khỏi artifact check |
 
 ---
 
@@ -317,5 +354,17 @@ Remove-Item consumer-app\package-lock.json -ErrorAction SilentlyContinue
 | Supply Chain Compromise: Software | T1195.002 | Malicious npm package qua Verdaccio |
 | Credential Access: Unsecured Credentials | T1552.007 | Đọc CI env vars (GITHUB_TOKEN, AWS_SECRET...) |
 | Exfiltration Over C2 Channel | T1041 | HTTP POST secrets về attacker server |
+| Masquerading | T1036.005 | User-Agent giả mạo npm client, job name vô hại |
 | Supply Chain: Compromise Software Supply Chain | T1195.002 | Artifact poisoning (inject backdoor vào build output) |
+
+---
+
+## Hạn Chế Của PoC (tự nhận)
+
+| Hạn chế | Giải thích |
+|---------|------------|
+| Single-host demo | Attacker + victim chạy cùng máy (127.0.0.1). Thực tế attacker ở remote server |
+| Không chạy CI thật | Dùng PowerShell script thay vì GitLab Runner. `.gitlab-ci.compromised.yml` là mô phỏng |
+| Static regex detection | IOC-1 dùng regex → dễ bị bypass bằng string concatenation/obfuscation |
+| Chỉ test Windows Defender | Chưa test multi-AV (VirusTotal) hoặc EDR khác |
 | Defense Evasion: Trusted Process | T1036.005 | Chạy dưới node.exe (signed binary) |

@@ -89,16 +89,28 @@ Write-Host "  (This may take 1-2 minutes)" -ForegroundColor Gray
 $scanStart = Get-Date
 try {
     Start-MpScan -ScanType CustomScan -ScanPath $root
+    
+    # Đợi Defender scan hoàn tất (Start-MpScan trả về async, cần chờ)
+    Write-Host "  Waiting 30s for Defender scan to complete in background..." -ForegroundColor Gray
+    Start-Sleep -Seconds 30
+    
     $scanEnd = Get-Date
     $scanDuration = $scanEnd - $scanStart
-    Write-Host "  Scan completed in $([math]::Round($scanDuration.TotalSeconds, 1))s" -ForegroundColor Green
+    Write-Host "  Scan completed in $([math]::Round($scanDuration.TotalSeconds, 1))s (incl. 30s wait)" -ForegroundColor Green
+    
+    # Đọc Defender event log để xác nhận scan thực sự hoàn tất
+    $scanEvents = Get-WinEvent -LogName "Microsoft-Windows-Windows Defender/Operational" -MaxEvents 5 -ErrorAction SilentlyContinue |
+        Where-Object { $_.TimeCreated -gt $scanStart }
+    $scanEventInfo = if ($scanEvents) { "$($scanEvents.Count) Defender event(s) after scan start" } else { "No Defender events found" }
+    Write-Host "  $scanEventInfo" -ForegroundColor Gray
     
     $report += @"
 [CUSTOM SCAN]
   Path:     $root
   Start:    $($scanStart.ToString("HH:mm:ss"))
   End:      $($scanEnd.ToString("HH:mm:ss"))
-  Duration: $([math]::Round($scanDuration.TotalSeconds, 1))s
+  Duration: $([math]::Round($scanDuration.TotalSeconds, 1))s (incl. 30s wait for async completion)
+  Events:   $scanEventInfo
 
 "@
 } catch {
@@ -167,15 +179,42 @@ $analysis = @"
      - Defender không scan nội dung build artifacts cho malware patterns
      - Base64-encoded payload trong comment không trigger heuristic
 
+  ═══════════════════════════════════════════════════════════
+  7. AMSI (Antimalware Scan Interface) — LÝ DO CỐT LÕI
+  ═══════════════════════════════════════════════════════════
+
+  AMSI là cơ chế Windows cho phép AV scan script content tại runtime.
+  NHƯNG: Node.js V8 engine KHÔNG tích hợp AMSI provider.
+
+  So sánh AMSI integration giữa các runtime:
+  ┌─────────────────┬──────────────────┬─────────────────────────┐
+  │ Runtime         │ AMSI Integration │ Defender có scan không? │
+  ├─────────────────┼──────────────────┼─────────────────────────┤
+  │ PowerShell      │ Có (built-in)    │ CÓ — detect obfuscated │
+  │ .NET CLR        │ Có               │ CÓ — Assembly.Load()   │
+  │ WSH (JScript)   │ Có               │ CÓ — Windows Script    │
+  │ Python (CPython)│ Không            │ KHÔNG — bypass          │
+  │ Node.js (V8)    │ KHÔNG            │ KHÔNG — BYPASS          │
+  └─────────────────┴──────────────────┴─────────────────────────┘
+
+  Lưu ý quan trọng:
+  - JScript chạy qua WSH (cscript/wscript) BỊ AMSI scan
+  - JavaScript chạy qua Node.js (V8 engine) KHÔNG bị AMSI scan
+  - Đây là lý do chính, mạnh hơn cả "trusted process" hay "no PE binary"
+  - V8 parse và execute JS trực tiếp mà không gọi Windows AMSI API
+    (amsi.dll → AmsiScanBuffer/AmsiScanString)
+
+  Kết luận: Payload bypass Defender nhờ ĐẶC ĐIỂM TỰ NHIÊN của Node.js
+  ecosystem (V8 không có AMSI), KHÔNG phải nhờ kỹ thuật anti-AV chủ động.
+  Tuy nhiên, 3 yếu tố evasion CÓ CHỦ ĐÍCH:
+  - User-Agent giả mạo npm client
+  - Fail-silent error handling
+  - Base64 encoding payload trong artifact
+
   So sánh với kỹ thuật evasion chủ động:
   ──────────────────────────────────────
   Payload này bypass Defender nhờ ĐẶC ĐIỂM TỰ NHIÊN của Node.js ecosystem,
   KHÔNG phải nhờ kỹ thuật anti-AV chủ động (obfuscation, packing, etc.)
-
-  Tuy nhiên, có một điểm evasion CÓ CHỦ ĐÍCH:
-  - User-Agent giả mạo npm client
-  - Fail-silent error handling (không trigger behavioral monitoring)
-  - Base64 encoding payload trong artifact
 "@
 
 Write-Host $analysis

