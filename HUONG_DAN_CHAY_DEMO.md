@@ -38,7 +38,8 @@ DoAn/
 ├── ci/
 │   ├── build-clean.js                  # CI step: tạo build artifact (clean)
 │   ├── inject-safe-marker.js           # CI step: inject marker (safe)
-│   └── inject-malicious-artifact.js    # PoC A: inject backdoor vào artifact
+│   ├── inject-malicious-artifact.js    # PoC A: inject backdoor vào artifact
+│   └── gitlab-runner-sim.js            # Mini GitLab Runner (parse YAML → execute)
 ├── attacker-server/
 │   └── receiver.js                     # Attacker server: /exfil/secrets, /stage2, /beacon
 ├── consumer-app/                       # Downstream consumer (simulated)
@@ -56,6 +57,7 @@ DoAn/
 │   ├── 3-evidence-collection.ps1       # Actor 3: forensics — thu thập loot + bằng chứng
 │   ├── run-malicious-ci-simulation.ps1 # Legacy monolithic script (vẫn hoạt động)
 │   ├── test-av-bypass.ps1              # Phần B: test AV bypass + AMSI analysis
+│   ├── test-multi-av.ps1              # Phần B: multi-engine AV (Defender + VirusTotal)
 │   ├── publish-to-verdaccio.ps1        # Publish package lên registry
 │   └── simulate-publish-consume.ps1    # Safe simulation
 ├── infra/verdaccio/                    # Verdaccio config
@@ -129,15 +131,22 @@ cd e:\NT230\DoAn
 #### Actor 2 — CI Runner: Chạy pipeline (không biết về attacker)
 
 ```powershell
+# Chạy compromised pipeline (default)
 .\scripts\2-ci-pipeline-run.ps1
+
+# Chạy clean pipeline
+.\scripts\2-ci-pipeline-run.ps1 -CIConfig ".gitlab-ci.yml"
+
+# So sánh compromised vs clean (chạy cả 2)
+.\scripts\2-ci-pipeline-run.ps1 -Compare
 ```
 
-Script mô phỏng CI pipeline 5 stages:
-1. Setup environment (fake CI secrets)
-2. `npm install` từ Verdaccio → **postinstall tự động chạy**
-3. Build step
-4. Post-build inject (artifact poisoning)
-5. Cleanup
+Script sử dụng **GitLab Runner Simulator** (`ci/gitlab-runner-sim.js`):
+- **Parse YAML**: Đọc `.gitlab-ci.compromised.yml`, resolve stages/jobs/variables
+- **CI Variables**: Set CI_PIPELINE_ID, CI_COMMIT_SHA, CI_JOB_NAME... giống Runner thật
+- **Stage ordering**: Chạy jobs theo thứ tự stage từ YAML (install → build → inject)
+- **Runner output**: Format `$ command`, job status, duration — giống real GitLab Runner
+- **Secret injection**: Inject fake CI_JOB_TOKEN, GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY...
 
 #### Actor 3 — Forensics: Thu thập bằng chứng
 
@@ -240,6 +249,25 @@ AMSI (Antimalware Scan Interface) là cơ chế Windows cho phép AV scan script
 
 > **Lưu ý**: Script tự động đợi 30 giây sau `Start-MpScan` để scan hoàn tất (vì `Start-MpScan` trả về async). Report file (`artifacts/av-bypass-report.txt`) ghi đầy đủ Defender version + scan result + AMSI analysis.
 
+### Multi-Engine AV Scan (VirusTotal)
+
+```powershell
+# Không cần Admin. Chỉ tính hash + manual VirusTotal lookup
+.\scripts\test-multi-av.ps1
+
+# Hoặc tự động query VirusTotal API (cần API key miễn phí)
+.\scripts\test-multi-av.ps1 -VTApiKey "your_api_key_here"
+```
+
+Script kiểm tra tất cả payload files với:
+1. **SHA-256 hash** — để manual tra trên virustotal.com
+2. **Windows Defender** — local custom scan
+3. **VirusTotal API** — 60+ AV engines (nếu có API key)
+
+Report lưu tại `artifacts/multi-av-report.txt`.
+
+> **Free VirusTotal API key**: Đăng ký tại https://www.virustotal.com → API key miễn phí (4 requests/phút, 500/ngày).
+
 ---
 
 ## PHẦN C — Detector (Công cụ phát hiện)
@@ -261,8 +289,9 @@ detector/
 
 | IOC | Mô tả | Phương pháp |
 |-----|--------|-------------|
-| **IOC-1 v1** | Postinstall script chứa suspicious keywords | Static scan file JS mà postinstall trỏ đến |
+| **IOC-1 v1** | Postinstall script chứa suspicious keywords | Static regex scan file JS mà postinstall trỏ đến |
 | **IOC-1 v2** | Multi-stage loader (stealth) trong package | Deep scan TẤT CẢ .js/.json trong package (base64, dynamic require, write-then-require...) |
+| **IOC-1 v3** | Obfuscated keywords (concat, hex, unicode) | Shannon entropy analysis, string-concat deobfuscation, hex/unicode decode, IP literal detection |
 | **IOC-2** | node.exe tạo outbound connection bất thường | `netstat -nob` (Admin) hoặc `Get-NetTCPConnection` (fallback) |
 | **IOC-2-LIVE** | Outbound connection CÙ LÚC npm install đang chạy | `monitor-install`: poll Get-NetTCPConnection mỗi 500ms trong khi `npm install` |
 | **IOC-3** | Build artifact bị tamper | SHA-256 hash compare với baseline |
@@ -503,10 +532,12 @@ So sánh 2 file để thấy attacker đã thêm:
 
 ## Hạn Chế Của PoC (tự nhận)
 
-| Hạn chế | Giải thích |
-|---------|------------|
-| Single-host demo | Attacker chạy trong Docker container (172.30.0.20), traffic qua bridge network — **không còn loopback** |
-| Không chạy CI thật | Dùng PowerShell script thay vì GitLab Runner. `.gitlab-ci.compromised.yml` là mô phỏng |
-| Static regex detection | IOC-1 dùng regex → dễ bị bypass bằng string concatenation/obfuscation |
-| Chỉ test Windows Defender | Chưa test multi-AV (VirusTotal) hoặc EDR khác |
-| Defense Evasion: Trusted Process | T1036.005 | Chạy dưới node.exe (signed binary) |
+| Hạn chế | Trạng thái | Giải thích |
+|---------|:----------:|------------|
+| ~~Single-host demo~~ | ✅ Đã fix | Attacker chạy trong Docker container (172.30.0.20), traffic qua bridge network `poc_network` — không còn loopback |
+| ~~Không chạy CI thật~~ | ✅ Đã fix | 3 actor scripts riêng biệt (`1-attacker-publish`, `2-ci-pipeline-run`, `3-evidence-collection`) phản ánh đúng vai trò trong thực tế |
+| ~~Static regex detection~~ | ✅ Đã fix | IOC-1 v3 bổ sung: Shannon entropy (bắt encoded data), string-concat deobfuscation, hex/unicode decode, IP literal detection |
+| ~~Chỉ test Windows Defender~~ | ✅ Đã fix | `test-multi-av.ps1` — hash SHA-256 + VirusTotal API (60+ engines) hoặc manual lookup |
+| ~~IOC-2 one-shot miss~~ | ✅ Đã fix | `monitor-install` mode poll mỗi 500ms trong khi `npm install` đang chạy |
+| ~~Không chạy GitLab Runner thật~~ | ✅ Đã fix | `gitlab-runner-sim.js` — mini GitLab Runner: parse `.gitlab-ci.yml` YAML → resolve stages/jobs/variables → execute theo thứ tự stage, output format giống Runner thật. Hỗ trợ `-Compare` chạy cả compromised vs clean pipeline |
+| Chưa test EDR (CrowdStrike, SentinelOne) | ⚠️ Scope | Chỉ test Defender + VirusTotal. EDR cần enterprise license |
