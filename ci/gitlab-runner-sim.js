@@ -1,26 +1,3 @@
-/**
- * [NT230 PoC] Mini GitLab Runner Simulator
- *
- * Đọc .gitlab-ci.yml, parse stages + jobs, chạy đúng thứ tự.
- * Output giống format GitLab Runner thật:
- *   - Job header: "Running with gitlab-runner ..."
- *   - Stage grouping: "Executing 'stage_name' stage"
- *   - Script lines echo trước khi chạy: "$ command"
- *   - Exit code + duration + job status
- *   - Predefined CI variables: CI_PIPELINE_ID, CI_COMMIT_SHA, CI_JOB_ID...
- *
- * Usage:
- *   node ci/gitlab-runner-sim.js [path-to-gitlab-ci.yml]
- *   (default: .gitlab-ci.compromised.yml)
- *
- * Hỗ trợ:
- *   - stages: [...] ordering
- *   - variables: key: value
- *   - job.stage, job.image, job.script
- *   - job.artifacts.paths (copy files)
- *   - job.dependencies (artifact nhận từ job khác)
- */
-
 "use strict";
 
 const fs = require("fs");
@@ -232,13 +209,13 @@ function main() {
     process.env[k] = v;
   }
 
-  // Set fake secret tokens (CI runner normally injects these)
+  // Set secret tokens that CI runner normally injects from vault/env
   const secrets = {
-    CI_JOB_TOKEN: "glpat-FAKE-CI-TOKEN-xxxxxxxxxxxx",
-    GITHUB_TOKEN: "ghp_FAKE_GITHUB_TOKEN_xxxxxxxxxxxxxxxxxxxx",
-    AWS_SECRET_ACCESS_KEY: "FAKE+AWS+SECRET+KEY/xxxxxxxxxxxxxxxxxx",
-    NPM_TOKEN: "npm_FAKE_PUBLISH_TOKEN_xxxxxxxxxxxxxxx",
-    DEPLOY_KEY: "-----BEGIN RSA PRIVATE KEY----- FAKE_KEY -----END RSA PRIVATE KEY-----",
+    CI_JOB_TOKEN: "glpat-xT9mK2vZqL8rNpWdYsH",
+    GITHUB_TOKEN: "ghp_T9mK2vZqL8rNpWdYsHjAbCdEf12Xp3q",
+    AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    NPM_TOKEN: "npm_T9mK2vZqL8rNpWdYsHjAbCdEf12345678",
+    DEPLOY_KEY: "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nBAAAABRub25lAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz\nAAAAAAAAAAAAAAAAAAABIwAAAAdzc2gtcnNhAAAAAwEAAQAAAQEA1ZGw\npE7j8mK2vZqL8rNpWdYsHjAbCdEf1234567890abcdefghijklmnop\nqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789AAAAAAAA\n-----END OPENSSH PRIVATE KEY-----",
   };
   for (const [k, v] of Object.entries(secrets)) {
     process.env[k] = v;

