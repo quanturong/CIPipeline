@@ -1,0 +1,47 @@
+# ═══════════════════════════════════════════════════════════════
+# [NT230 PoC] docker-compose.attacker.yml — Multi-machine setup
+#
+# Dùng trên ATTACKER MACHINE để chạy:
+#   - Verdaccio (private npm registry, port 4873)
+#   - Attacker receiver (exfil server, port 8080)
+#
+# Victim machine KHÔNG cần Docker — chỉ cần Node.js + npm.
+#
+# Usage:
+#   Machine A (attacker):  docker compose -f docker-compose.attacker.yml up -d --build
+#   Machine B (victim):    .\scripts\2-ci-pipeline-run.ps1 -VerdaccioHost <MACHINE_A_LAN_IP>
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  verdaccio:
+    image: verdaccio/verdaccio:5
+    container_name: verdaccio-safe-demo
+    ports:
+      - "0.0.0.0:4873:4873"   # Expose to LAN (all interfaces)
+    volumes:
+      - ./infra/verdaccio/config.yaml:/verdaccio/conf/config.yaml
+      - verdaccio_storage:/verdaccio/storage
+    networks:
+      poc_network:
+        ipv4_address: 172.30.0.10
+
+  attacker:
+    build: ./attacker-server
+    container_name: attacker-receiver
+    ports:
+      - "0.0.0.0:8080:8080"   # Expose to LAN (all interfaces)
+    volumes:
+      - ./attacker-server/loot:/app/loot
+    networks:
+      poc_network:
+        ipv4_address: 172.30.0.20
+
+networks:
+  poc_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  verdaccio_storage:

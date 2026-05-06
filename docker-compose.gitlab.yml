@@ -1,0 +1,87 @@
+# ═══════════════════════════════════════════════════════════════
+# [NT230 PoC] docker-compose.gitlab.yml — Machine A: GitLab Host
+#
+# Chạy GitLab CE + GitLab Runner trên Machine A (GitLab host).
+#
+# Yêu cầu: Docker Desktop, ít nhất 4GB RAM cho GitLab CE.
+#
+# Kiến trúc 3 máy:
+#   Machine A (GitLab host):    GitLab CE + GitLab Runner → docker-compose.gitlab.yml
+#   Machine B (Victim/Dev):     Clone repo, push code, xem pipeline chạy
+#   Machine C (Attacker):       Verdaccio + receiver       → docker-compose.attacker.yml
+#
+# Setup steps (Machine A):
+#   1. docker compose -f docker-compose.gitlab.yml up -d
+#   2. Đợi ~3 phút, mở http://localhost:80 → đặt password root
+#   3. Tạo project "supply-chain-victim"
+#   4. Settings → CI/CD → Variables:
+#        NPM_REGISTRY   = http://<MACHINE_C_IP>:4873
+#        ATTACKER_HOST  = <MACHINE_C_IP>
+#        GITHUB_TOKEN   = ghp_FAKE_GITHUB_TOKEN_xxx       (fake — để demo exfil)
+#        AWS_SECRET_ACCESS_KEY = FAKE+AWS+SECRET+KEY/...  (fake)
+#        NPM_TOKEN      = npm_FAKE_PUBLISH_TOKEN_xxx      (fake)
+#   5. Runner tự đăng ký qua registration_token trong compose
+#
+# Machine B (Victim):
+#   1. git clone http://<MACHINE_A_IP>/root/supply-chain-victim
+#   2. Copy nội dung repo DoAn vào
+#   3. git add . ; git commit -m "initial" ; git push
+#   → Pipeline chạy tự động trên GitLab Runner (Machine A)
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: gitlab-host
+    restart: unless-stopped
+    hostname: "gitlab.nt230.local"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.nt230.local'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+        # Tắt các service không cần thiết để tiết kiệm RAM
+        prometheus_monitoring['enable'] = false
+        alertmanager['enable'] = false
+        grafana['enable'] = false
+        gitlab_exporter['enable'] = false
+        sidekiq['max_concurrency'] = 5
+        puma['worker_processes'] = 2
+    ports:
+      - "80:80"
+      - "2222:22"
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+    networks:
+      gitlab_network:
+        ipv4_address: 172.31.0.10
+    shm_size: "256m"
+
+  gitlab-runner:
+    image: gitlab/gitlab-runner:latest
+    container_name: gitlab-runner
+    restart: unless-stopped
+    depends_on:
+      - gitlab
+    volumes:
+      - gitlab_runner_config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      gitlab_network:
+        ipv4_address: 172.31.0.11
+    # Runner tự đăng ký với GitLab sau khi start
+    # Xem hướng dẫn manual registration bên dưới
+
+networks:
+  gitlab_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+
+volumes:
+  gitlab_config:
+  gitlab_logs:
+  gitlab_data:
+  gitlab_runner_config:

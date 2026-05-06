@@ -196,11 +196,13 @@ function main() {
 
   // Merge with YAML variables (with local overrides for hostnames)
   // In real GitLab CI, "verdaccio" resolves via Docker DNS.
-  // Locally, we map it to localhost.
+  // 1-machine: map "verdaccio:" → "localhost:"
+  // Multi-machine: VERDACCIO_HOST env var overrides the target host
+  const verdaccioHost = process.env.VERDACCIO_HOST || "localhost";
   const localOverrides = {};
   if (ci._variables.NPM_REGISTRY) {
     localOverrides.NPM_REGISTRY = ci._variables.NPM_REGISTRY
-      .replace("verdaccio:", "localhost:");
+      .replace("verdaccio:", `${verdaccioHost}:`);
   }
   const allVars = { ...predefined, ...ci._variables, ...localOverrides };
 

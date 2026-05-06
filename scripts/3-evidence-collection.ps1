@@ -13,11 +13,22 @@
     4. Evidence summary
 
   Usage:
-    .\3-evidence-collection.ps1
+    .\3-evidence-collection.ps1                         # chạy trên Machine C (lấy loot từ thư mục local)
+    .\3-evidence-collection.ps1 -LootDir C:\path\loot   # chỉ rõ lấy loot từ đường dẫn khác
 #>
+
+param(
+    # Đường dẫn đến thư mục loot của attacker.
+    # Mặc định: attacker-server\loot (relative to project root — dùng khi chạy trên Machine C)
+    [string]$LootDir = ""
+)
 
 $ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
+
+if ([string]::IsNullOrEmpty($LootDir)) {
+    $LootDir = Join-Path $root "attacker-server\loot"
+}
 
 Write-Host "═" * 60 -ForegroundColor Magenta
 Write-Host "[FORENSICS] Incident Response — Evidence Collection" -ForegroundColor Magenta
@@ -33,7 +44,7 @@ $artifactPoisoned = $false
 # ───────────────────────────────────────────────────────────────────────────
 Write-Host "[1/4] Checking attacker loot directory..." -ForegroundColor Yellow
 
-$lootDir = Join-Path $root "attacker-server\loot"
+$lootDir = $LootDir
 if (Test-Path $lootDir) {
     $lootFiles = Get-ChildItem $lootDir -File
     Write-Host "  Found $($lootFiles.Count) loot file(s):" -ForegroundColor White
@@ -95,16 +106,21 @@ if (Test-Path $ciMarker) {
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# Evidence 3: Docker logs (attacker receiver)
+# Evidence 3: Kiểm tra receiver process
 # ───────────────────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/4] Attacker receiver logs (docker)..." -ForegroundColor Yellow
+Write-Host "[3/4] Receiver process status..." -ForegroundColor Yellow
 
-try {
-    $logs = docker logs attacker-receiver --tail 100 2>&1
-    Write-Host $logs -ForegroundColor DarkGray
-} catch {
-    Write-Host "  Could not retrieve docker logs." -ForegroundColor Yellow
+$receiverProcs = Get-Process -Name "node" -ErrorAction SilentlyContinue
+if ($receiverProcs) {
+    Write-Host "  node.exe đang chạy: $($receiverProcs.Count) process" -ForegroundColor Gray
+    foreach ($p in $receiverProcs) {
+        Write-Host "    PID $($p.Id) — started $($p.StartTime)" -ForegroundColor DarkGray
+    }
+    Write-Host "  Tip: xem log receiver trong cửa sổ terminal của nó." -ForegroundColor Cyan
+} else {
+    Write-Host "  Không có node.exe — receiver có thể đã exit." -ForegroundColor Yellow
+    Write-Host "  Loot files vẫn tồn tại nếu exfil đã xảy ra trước đó." -ForegroundColor DarkGray
 }
 
 # ───────────────────────────────────────────────────────────────────────────

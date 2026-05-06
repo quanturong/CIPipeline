@@ -1,0 +1,46 @@
+# ═══════════════════════════════════════════════════════════════
+# Verdaccio config — Native (không dùng Docker)
+# Dùng khi chạy verdaccio trực tiếp trên máy attacker (Machine C)
+#
+# Run:
+#   cd infra/verdaccio
+#   verdaccio --config config-native.yaml --listen 0.0.0.0:4873
+#
+# Hoặc dùng script:
+#   .\scripts\start-attacker-services.ps1
+# ═══════════════════════════════════════════════════════════════
+
+# Relative path — hoạt động khi verdaccio chạy từ thư mục infra/verdaccio/
+storage: ./storage
+
+web:
+  title: NT230 PoC Registry
+
+auth:
+  htpasswd:
+    file: ./storage/htpasswd
+    max_users: 100
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    timeout: 30s
+
+packages:
+  "@demo/*":
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+  "**":
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+
+# Lắng nghe trên tất cả interfaces — cho phép victim (máy khác) kết nối
+listen: 0.0.0.0:4873
+
+server:
+  keepAliveTimeout: 60
+
+log:
+  - { type: stdout, format: pretty, level: http }

