@@ -44,7 +44,6 @@ services:
         # Tắt các service không cần thiết để tiết kiệm RAM
         prometheus_monitoring['enable'] = false
         alertmanager['enable'] = false
-        grafana['enable'] = false
         gitlab_exporter['enable'] = false
         sidekiq['max_concurrency'] = 5
         puma['worker_processes'] = 2
@@ -71,6 +70,8 @@ services:
     depends_on:
       - gitlab
     privileged: true
+    extra_hosts:
+      - "gitlab.nt230.local:172.31.0.10"
     volumes:
       - gitlab_runner_config:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock
