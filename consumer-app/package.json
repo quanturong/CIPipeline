@@ -9,6 +9,6 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@demo/safe-marker-package": "file:../dist/demo-safe-marker-package-1.0.0.tgz"
+    "@demo/safe-marker-package": "*"
   }
 }

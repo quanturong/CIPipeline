@@ -1,22 +1,22 @@
 stages:
   - build
 
-build_clean:
-  stage: build
-  image: node:20
-  script:
-    - node ci/build-clean.js
-  artifacts:
-    paths:
-      - artifacts/
+variables:
+  NPM_REGISTRY: "http://localhost:4873"
 
-# OPTIONAL DEMO: Simulated compromised job (safe marker only)
-build_with_injected_step:
+build:
   stage: build
-  image: node:20
   script:
-    - node ci/build-clean.js
-    - node ci/inject-safe-marker.js
+    - echo "[CI] Pipeline started - supply-chain demo"
+    - node --version
+    - npm --version
+    - echo "[CI] Installing dependencies from registry $NPM_REGISTRY"
+    - cd consumer-app
+    - npm install --registry $NPM_REGISTRY
+    - echo "[CI] Running application..."
+    - node index.js
+    - echo "[CI] Build completed."
   artifacts:
     paths:
       - artifacts/
+    when: always
