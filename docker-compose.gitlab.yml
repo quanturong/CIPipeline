@@ -57,6 +57,10 @@ services:
       gitlab_network:
         ipv4_address: 172.31.0.10
     shm_size: "256m"
+    privileged: true
+    tmpfs:
+      - /tmp:exec
+      - /var/tmp:exec
 
   gitlab-runner:
     image: gitlab/gitlab-runner:latest
@@ -64,6 +68,7 @@ services:
     restart: unless-stopped
     depends_on:
       - gitlab
+    privileged: true
     volumes:
       - gitlab_runner_config:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock
