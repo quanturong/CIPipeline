@@ -1,5 +1,6 @@
 stages:
   - build
+  - detect
 
 variables:
   NPM_REGISTRY: "http://localhost:4873"
@@ -12,10 +13,23 @@ build:
     - npm --version
     - echo "[CI] Installing dependencies from registry $NPM_REGISTRY"
     - cd consumer-app
+    - rm -rf node_modules package-lock.json
+    - npm cache clean --force
     - npm install --registry $NPM_REGISTRY
     - echo "[CI] Running application..."
     - node index.js
     - echo "[CI] Build completed."
+  artifacts:
+    paths:
+      - artifacts/
+    when: always
+
+detect:
+  stage: detect
+  script:
+    - echo "[DETECTOR] Scanning for supply chain IOCs..."
+    - node detector/detect-supply-chain.js scan consumer-app/node_modules
+  allow_failure: true
   artifacts:
     paths:
       - artifacts/

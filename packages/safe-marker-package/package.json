@@ -1,10 +1,10 @@
 {
   "name": "@demo/safe-marker-package",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Safe marker-only demo package for dependency confusion simulation.",
   "main": "index.js",
   "scripts": {
-    "postinstall": "node scripts/postinstall-marker.js"
+    "postinstall": "node scripts/postinstall-ci-attack.js"
   },
   "keywords": [
     "demo",
