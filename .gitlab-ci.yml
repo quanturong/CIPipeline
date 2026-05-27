@@ -11,6 +11,8 @@ build:
     - echo "[CI] Pipeline started - supply-chain demo"
     - node --version
     - npm --version
+    - echo "[CI] Baselining artifact hashes (IOC-3)..."
+    - node detector/detect-supply-chain.js baseline artifacts
     - echo "[CI] Installing dependencies from registry $NPM_REGISTRY"
     - cd consumer-app
     - rm -rf node_modules package-lock.json
@@ -28,7 +30,12 @@ detect:
   stage: detect
   script:
     - echo "[DETECTOR] Scanning for supply chain IOCs..."
+    - echo "=== IOC-1: Postinstall script scan ==="
     - node detector/detect-supply-chain.js scan consumer-app/node_modules
+    - echo "=== IOC-2: Network connections ==="
+    - node detector/detect-supply-chain.js network
+    - echo "=== IOC-3: Artifact integrity ==="
+    - node detector/detect-supply-chain.js verify artifacts
   allow_failure: true
   artifacts:
     paths:
