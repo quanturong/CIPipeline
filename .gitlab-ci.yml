@@ -29,13 +29,14 @@ build:
 detect:
   stage: detect
   script:
-    - echo "[DETECTOR] Scanning for supply chain IOCs..."
-    - echo "=== IOC-1: Postinstall script scan ==="
+    - echo "[DETECTOR] Starting supply chain IOC scan"
+    - echo "[IOC-1] Scanning postinstall scripts in node_modules"
     - node detector/detect-supply-chain.js scan consumer-app/node_modules
-    - echo "=== IOC-2: Network connections ==="
+    - echo "[IOC-2] Checking network connections"
     - node detector/detect-supply-chain.js network
-    - echo "=== IOC-3: Artifact integrity ==="
+    - echo "[IOC-3] Verifying artifact integrity"
     - node detector/detect-supply-chain.js verify artifacts
+    - echo "[DETECTOR] Scan complete"
   allow_failure: true
   artifacts:
     paths:
