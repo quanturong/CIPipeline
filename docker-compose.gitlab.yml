@@ -29,6 +29,8 @@
 #   → Pipeline chạy tự động trên GitLab Runner (Machine A)
 # ═══════════════════════════════════════════════════════════════
 
+version: '3.8'
+
 services:
   gitlab:
     image: gitlab/gitlab-ce:latest

@@ -12,6 +12,8 @@
 #   Machine B (victim):    .\scripts\2-ci-pipeline-run.ps1 -VerdaccioHost <MACHINE_A_LAN_IP>
 # ═══════════════════════════════════════════════════════════════
 
+version: '3.8'
+
 services:
   verdaccio:
     image: verdaccio/verdaccio:5
